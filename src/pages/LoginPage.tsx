@@ -627,7 +627,7 @@ export default function LoginPage() {
         <div className="lp-card">
           <div className="lp-shuttle">🏸</div>
           <h1 className="lp-title">SBC Badminton</h1>
-          <p className="lp-subtitle">Surrey Badminton Club · Member Portal</p>
+          <p className="lp-subtitle">Surrey Badminton Club · Booking Portal</p>
 
           {/* ── mode tabs (only login / register) ── */}
           {mode !== 'reset' && (
