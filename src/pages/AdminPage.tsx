@@ -820,7 +820,6 @@ export default function AdminPage() {
                     onChange={(e) => setCreateFrom(e.target.value)}
                   >
                     {[
-                      '6:00 AM',
                       '7:00 AM',
                       '8:00 AM',
                       '9:00 AM',
@@ -835,7 +834,7 @@ export default function AdminPage() {
                       '6:00 PM',
                       '7:00 PM',
                       '8:00 PM',
-                      '9:00 PM',
+                      '11:00 PM',
                     ].map((t) => (
                       <option key={t} value={t}>
                         {t}
@@ -866,7 +865,7 @@ export default function AdminPage() {
                       '7:00 PM',
                       '8:00 PM',
                       '9:00 PM',
-                      '10:00 PM',
+                      '11:00 PM',
                     ].map((t) => (
                       <option key={t} value={t}>
                         {t}
