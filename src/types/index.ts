@@ -49,7 +49,8 @@ export interface AuthResponse {
   user: AuthUser;
 }
 
-export interface RegisterResponse extends AuthResponse {
+export interface RegisterResponse {
+  success: boolean;
   resetKey: string;
 }
 

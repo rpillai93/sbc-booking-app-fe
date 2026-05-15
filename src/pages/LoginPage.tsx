@@ -70,6 +70,15 @@ function ResetKeyModal({
         <h2 className="lp-modal-title">
           {isNew ? 'Save your new reset key' : 'Save your reset key'}
         </h2>
+
+        {/* Registration-specific message */}
+        {!isNew && (
+          <div className="lp-modal-approval-notice">
+            ✅ Sign up is complete. Please contact an admin to approve your account and then proceed
+            to login.
+          </div>
+        )}
+
         <p className="lp-modal-body">
           {isNew
             ? 'Your password was updated. Here is your new reset key — the old one no longer works.'
@@ -89,6 +98,29 @@ function ResetKeyModal({
 
         <button className="lp-btn lp-modal-confirm" onClick={onDismiss}>
           I've saved my key →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Pending approval modal (shown when login is blocked) ──────────────────────
+function PendingApprovalModal({ onDismiss }: { onDismiss: () => void }) {
+  return (
+    <div className="lp-modal-backdrop">
+      <div className="lp-modal">
+        <div className="lp-modal-icon">⏳</div>
+        <h2 className="lp-modal-title">Awaiting admin approval</h2>
+        <div className="lp-modal-approval-notice">
+          Sign up is complete. Please contact an admin to approve your account and then proceed to
+          login.
+        </div>
+        <p className="lp-modal-body">
+          Your account exists but hasn't been approved yet. Once an admin activates it you'll be
+          able to sign in.
+        </p>
+        <button className="lp-btn lp-modal-confirm" onClick={onDismiss}>
+          OK, got it →
         </button>
       </div>
     </div>
@@ -129,6 +161,7 @@ export default function LoginPage() {
   // modal
   const [modalKey, setModalKey] = useState<string | null>(null);
   const [modalIsNew, setModalIsNew] = useState(false);
+  const [showPendingModal, setShowPendingModal] = useState(false);
 
   const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
   const passwordsMismatch = confirmPassword.length > 0 && password !== confirmPassword;
@@ -146,8 +179,16 @@ export default function LoginPage() {
       loginUser(res.data.token, res.data.user);
       navigate('/');
     } catch (err) {
-      const axiosErr = err as AxiosError<{ message: string }>;
-      setError(axiosErr.response?.data?.message ?? 'Something went wrong');
+      const axiosErr = err as AxiosError<{ message?: string; code?: string }>;
+      // ← detect pending-approval 403
+      if (
+        axiosErr.response?.status === 403 &&
+        axiosErr.response?.data?.code === 'PENDING_APPROVAL'
+      ) {
+        setShowPendingModal(true);
+      } else {
+        setError(axiosErr.response?.data?.message ?? 'Something went wrong');
+      }
     } finally {
       setLoading(false);
     }
@@ -184,8 +225,6 @@ export default function LoginPage() {
       // Show the key modal before logging in
       setModalKey(res.data.resetKey);
       setModalIsNew(false);
-      // Store token/user so we can navigate after they dismiss the modal
-      loginUser(res.data.token, res.data.user);
     } catch (err) {
       const axiosErr = err as AxiosError<{ message: string }>;
       setError(axiosErr.response?.data?.message ?? 'Something went wrong');
@@ -225,13 +264,7 @@ export default function LoginPage() {
 
   function dismissModal() {
     setModalKey(null);
-    if (modalIsNew) {
-      // After a reset they need to sign in fresh
-      switchMode('login');
-    } else {
-      // After register, navigate to home (loginUser was already called)
-      navigate('/');
-    }
+    switchMode('login');
   }
 
   function switchMode(next: Mode) {
@@ -612,6 +645,18 @@ export default function LoginPage() {
           line-height: 1.5;
         }
 
+        .lp-modal-approval-notice {
+          background: rgba(34,197,94,0.1);
+          border: 1px solid rgba(34,197,94,0.3);
+          border-radius: 10px;
+          padding: 12px 14px;
+          font-size: 13px;
+          color: #4ade80;
+          line-height: 1.6;
+          margin-bottom: 16px;
+          font-weight: 500;
+      }
+
         .lp-modal-confirm { margin-top: 0; }
       `}</style>
 
@@ -623,6 +668,8 @@ export default function LoginPage() {
         {modalKey && (
           <ResetKeyModal resetKey={modalKey} isNew={modalIsNew} onDismiss={dismissModal} />
         )}
+        {/* ← new: pending approval modal */}
+        {showPendingModal && <PendingApprovalModal onDismiss={() => setShowPendingModal(false)} />}
 
         <div className="lp-card">
           <div className="lp-shuttle">🏸</div>
