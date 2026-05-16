@@ -354,6 +354,11 @@ export default function IndexPage() {
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         body { background: #0d0d0d; }
+        
+        html, body {
+          overflow-x: hidden;
+          max-width: 100%;
+        }
 
         .ip-root {
         min-height: 100vh;

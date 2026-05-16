@@ -296,6 +296,11 @@ export default function LoginPage() {
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+        html, body {
+          overflow-x: hidden;
+          max-width: 100%;
+        }
+
         .lp-root {
           min-height: 100vh;
           display: flex;
@@ -336,7 +341,7 @@ export default function LoginPage() {
           background: #161616;
           border: 1px solid #2a2a2a;
           border-radius: 20px;
-          padding: 40px 36px;
+          padding: 32px 20px;
           box-shadow: 0 40px 80px rgba(0,0,0,0.6);
           animation: cardIn 0.5s cubic-bezier(0.16,1,0.3,1) both;
         }
@@ -603,9 +608,10 @@ export default function LoginPage() {
 
         .lp-key-display {
           display: flex;
+          flex-wrap: wrap;
           align-items: center;
           justify-content: center;
-          gap: 12px;
+          gap: 8px;
           background: #0d0d0d;
           border: 1px solid #22c55e44;
           border-radius: 12px;
@@ -615,11 +621,12 @@ export default function LoginPage() {
 
         .lp-key-value {
           font-family: 'Courier New', monospace;
-          font-size: 28px;
+          font-size: 22px;
           font-weight: 700;
-          letter-spacing: 8px;
+          letter-spacing: 5px;
           color: #22c55e;
           user-select: all;
+          word-break: break-all;
         }
 
         .lp-key-copy {

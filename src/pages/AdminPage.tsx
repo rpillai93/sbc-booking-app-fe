@@ -10,9 +10,15 @@ import {
   archiveSlot,
   updateAmount,
   updateCourtNo,
+  getUsers,
+  approveUser,
+  deleteUser,
+  addUserComments,
 } from '../api/api';
-import type { Slot, Player, GroupedSlots } from '../types';
+import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
+
+type AdminTab = 'slots' | 'users';
 
 // ─── modal state ──────────────────────────────────────────────────────────────
 interface ModalState {
@@ -53,9 +59,11 @@ const APPLY_CLOSED: ApplyModalState = {
   includeWaitlist: false,
 };
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─── users sort ───────────────────────────────────────────────────────────────
+type UserSortKey = 'name' | 'contact' | 'lastLogin' | 'profileApproved';
+type SortDir = 'asc' | 'desc';
 
-// Sum all playerAmts across all active slots in a group
+// ─── helpers ──────────────────────────────────────────────────────────────────
 function computeGroupTotal(slots: Slot[]): number {
   return slots
     .filter((s) => !s.slotArchived)
@@ -63,12 +71,10 @@ function computeGroupTotal(slots: Slot[]): number {
     .reduce((sum, p) => sum + (p.playerAmt ?? 0), 0);
 }
 
-// Format a number cleanly: no decimals if whole, 2dp otherwise
 function fmt(n: number): string {
   return n % 1 === 0 ? String(n) : n.toFixed(2);
 }
 
-// Parse a 12-hour time string like "6:00 PM" into total minutes
 function parseTime(t: string): number {
   const [timePart, period] = t.split(' ');
   // eslint-disable-next-line prefer-const
@@ -78,40 +84,83 @@ function parseTime(t: string): number {
   return hours * 60 + minutes;
 }
 
+function formatLastLogin(ts: string): string {
+  if (!ts) return '—';
+  try {
+    const date = new Date(ts.trim());
+    if (isNaN(date.getTime())) return ts;
+    const time = date
+      .toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+      .toLowerCase()
+      .replace(' ', '\u202f'); // narrow no-break space
+    const day = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${time} · ${day}`;
+  } catch {
+    return ts;
+  }
+}
+
+function SortArrow({
+  col,
+  activeKey,
+  dir,
+  onSort,
+}: {
+  col: UserSortKey;
+  activeKey: UserSortKey;
+  dir: SortDir;
+  onSort: (col: UserSortKey) => void;
+}) {
+  const active = activeKey === col;
+  return (
+    <span
+      className={`usr-sort-arrow${active ? ' active' : ''}`}
+      onClick={() => onSort(col)}
+      title={active ? (dir === 'asc' ? 'Sort descending' : 'Sort ascending') : 'Sort'}
+    >
+      {active ? (dir === 'asc' ? '↑' : '↓') : '↕'}
+    </span>
+  );
+}
+
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
 
+  const [activeTab, setActiveTab] = useState<AdminTab>('slots');
+
+  // ── slots state ──────────────────────────────────────────────────────────
   const [groupedSlots, setGroupedSlots] = useState<GroupedSlots>({});
   const [loading, setLoading] = useState(true);
   const [loaderMsg, setLoaderMsg] = useState('Loading...');
   const [modal, setModal] = useState<ModalState>(CLOSED);
   const [okayMsg, setOkayMsg] = useState('');
 
-  // create form
   const [createDate, setCreateDate] = useState('');
   const [createFrom, setCreateFrom] = useState('6:00 PM');
   const [createTo, setCreateTo] = useState('8:00 PM');
   const [createCourts, setCreateCourts] = useState(1);
   const [creating, setCreating] = useState(false);
 
-  // group-level amount input: key = groupKey, value = raw string input
   const [editAmtKey, setEditAmtKey] = useState<string | null>(null);
   const [editAmtValue, setEditAmtValue] = useState('');
 
-  // apply-amounts modal
   const [applyModal, setApplyModal] = useState<ApplyModalState>(APPLY_CLOSED);
   const [editingTotal, setEditingTotal] = useState(false);
   const [totalInputValue, setTotalInputValue] = useState('');
 
-  // archive expand
   const [expandedArchiveIds, setExpandedArchiveIds] = useState<Set<string>>(new Set());
 
-  // court number inline editing
   const [editingCourtId, setEditingCourtId] = useState<string | null>(null);
   const [editingCourtValue, setEditingCourtValue] = useState('');
 
-  // ── fetch ───────────────────────────────────────────────────────────────────
+  // ── users state ──────────────────────────────────────────────────────────
+  const [users, setUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userSortKey, setUserSortKey] = useState<UserSortKey>('name');
+  const [userSortDir, setUserSortDir] = useState<SortDir>('asc');
+
+  // ── fetch slots ──────────────────────────────────────────────────────────
   const fetchSlots = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     try {
@@ -124,14 +173,37 @@ export default function AdminPage() {
     }
   }, []);
 
+  // ── fetch users ──────────────────────────────────────────────────────────
+  const fetchUsers = useCallback(async () => {
+    setUsersLoading(true);
+    try {
+      const res = await getUsers();
+      setUsers(res.data.users);
+    } catch {
+      setOkayMsg('Failed to load users. Please refresh.');
+    } finally {
+      setUsersLoading(false);
+    }
+  }, []);
+
   const didInit = useRef(false);
+  const usersFetched = useRef(false);
+
   useEffect(() => {
     if (didInit.current) return;
     didInit.current = true;
     fetchSlots();
   }, [fetchSlots]);
 
-  // ── helpers ─────────────────────────────────────────────────────────────────
+  // Fetch users when tab switches to users
+  useEffect(() => {
+    if (activeTab !== 'users') return;
+    if (usersFetched.current) return;
+    usersFetched.current = true;
+    fetchUsers();
+  }, [activeTab, fetchUsers]);
+
+  // ── confirm helper ────────────────────────────────────────────────────────
   function confirm(
     message: string,
     onConfirm: () => void,
@@ -173,7 +245,7 @@ export default function AdminPage() {
     });
   }
 
-  // ── create ──────────────────────────────────────────────────────────────────
+  // ── create ────────────────────────────────────────────────────────────────
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!createDate) {
@@ -202,7 +274,7 @@ export default function AdminPage() {
     }
   }
 
-  // ── delete / lock / hide / archive ─────────────────────────────────────────
+  // ── slot actions ──────────────────────────────────────────────────────────
   function handleDelete(slot: Slot) {
     confirm(
       `Delete court on <b>${slot.date}, ${slot.time}</b>? This cannot be undone.`,
@@ -257,18 +329,14 @@ export default function AdminPage() {
     );
   }
 
-  // ── open apply-amounts modal ────────────────────────────────────────────────
-  // Called after user types a total and clicks Save on the amount bar.
-  // Distributes the total equally across main players; waitlist starts at $0.
+  // ── apply amounts ─────────────────────────────────────────────────────────
   function openApplyModal(groupKey: string, slots: Slot[], totalInput: number) {
     const activeSlots = slots.filter((s) => !s.slotArchived);
-
     const mainPlayers: PlayerAmtRow[] = [];
     const wlPlayers: PlayerAmtRow[] = [];
-
     for (const slot of activeSlots) {
       for (const p of slot.players) {
-        if (p.name?.trim()) {
+        if (p.name?.trim())
           mainPlayers.push({
             slotId: slot._id,
             playerId: String(p._id),
@@ -276,10 +344,9 @@ export default function AdminPage() {
             isWaitList: false,
             amount: '',
           });
-        }
       }
       for (const p of slot.waitList) {
-        if (p.name?.trim()) {
+        if (p.name?.trim())
           wlPlayers.push({
             slotId: slot._id,
             playerId: String(p._id),
@@ -287,18 +354,13 @@ export default function AdminPage() {
             isWaitList: true,
             amount: '0',
           });
-        }
       }
     }
-
-    // distribute total equally across main players only (waitlist starts $0)
     const split = mainPlayers.length > 0 ? (totalInput / mainPlayers.length).toFixed(2) : '0.00';
-
     const rows: PlayerAmtRow[] = [
       ...mainPlayers.map((r) => ({ ...r, amount: split })),
       ...wlPlayers,
     ];
-
     setApplyModal({ open: true, groupKey, rows, includeWaitlist: false });
     setEditAmtKey(null);
   }
@@ -313,11 +375,27 @@ export default function AdminPage() {
 
   function toggleIncludeWaitlist(checked: boolean) {
     setApplyModal((prev) => {
-      // when unchecking, reset waitlist amounts back to 0
-      const rows = prev.rows.map((r) =>
-        r.isWaitList ? { ...r, amount: checked ? r.amount : '0' } : r,
-      );
-      return { ...prev, includeWaitlist: checked, rows };
+      // figure out the current total across all active (non-disabled) rows
+      const currentTotal = prev.rows.reduce((sum, r) => {
+        if (r.isWaitList && !prev.includeWaitlist) return sum; // was disabled, not counted
+        return sum + (parseFloat(r.amount) || 0);
+      }, 0);
+
+      const newRows = prev.rows.map((r) => ({ ...r }));
+      const eligibleCount = checked
+        ? newRows.length // everyone
+        : newRows.filter((r) => !r.isWaitList).length; // main players only
+
+      const split = eligibleCount > 0 ? (currentTotal / eligibleCount).toFixed(2) : '0.00';
+
+      return {
+        ...prev,
+        includeWaitlist: checked,
+        rows: newRows.map((r) => {
+          if (r.isWaitList && !checked) return { ...r, amount: '0' }; // excluded → zero
+          return { ...r, amount: split }; // all others → equal split
+        }),
+      };
     });
   }
 
@@ -326,24 +404,17 @@ export default function AdminPage() {
       const activRows = prev.rows.filter((r) => !r.isWaitList || prev.includeWaitlist);
       const count = activRows.length;
       if (count === 0) return prev;
-
       const split = (newTotal / count).toFixed(2);
-
       const rows = prev.rows.map((r) => {
-        // only redistribute rows that are currently editable
         if (r.isWaitList && !prev.includeWaitlist) return r;
         return { ...r, amount: split };
       });
-
       return { ...prev, rows };
     });
   }
 
-  // ── save apply modal ────────────────────────────────────────────────────────
   async function saveApplyModal() {
     const { rows, groupKey } = applyModal;
-
-    // group rows by slot
     const bySlot = new Map<
       string,
       {
@@ -351,7 +422,6 @@ export default function AdminPage() {
         waitList: { _id: string; playerAmt: number }[];
       }
     >();
-
     for (const row of rows) {
       if (!bySlot.has(row.slotId)) bySlot.set(row.slotId, { players: [], waitList: [] });
       const entry = bySlot.get(row.slotId)!;
@@ -359,20 +429,15 @@ export default function AdminPage() {
       if (row.isWaitList) entry.waitList.push({ _id: row.playerId, playerAmt: amt });
       else entry.players.push({ _id: row.playerId, playerAmt: amt });
     }
-
-    // also include active slots that had no named players (so their amounts get zeroed properly)
     const activeSlots = Object.values(groupedSlots)
       .flat()
       .filter((s) => !s.slotArchived && `${s.date}__${s.time}` === groupKey);
-
     for (const slot of activeSlots) {
       if (!bySlot.has(slot._id)) bySlot.set(slot._id, { players: [], waitList: [] });
     }
-
     setApplyModal(APPLY_CLOSED);
     setEditingTotal(false);
     setTotalInputValue('');
-
     await withLoader('Saving amounts...', async () => {
       await Promise.all(
         Array.from(bySlot.entries()).map(([slotId, data]) =>
@@ -382,13 +447,10 @@ export default function AdminPage() {
     });
   }
 
-  // ── computed total shown in the amount bar ──────────────────────────────────
-  // Simply sums all playerAmt values for all active slots in the group.
   function getDisplayTotal(slots: Slot[]): number {
     return computeGroupTotal(slots);
   }
 
-  // ── court number save ───────────────────────────────────────────────────────
   function handleCourtNoSave(slot: Slot, newValue: string) {
     const num = parseInt(newValue, 10);
     if (isNaN(num) || num < 1 || num > 9) {
@@ -406,16 +468,140 @@ export default function AdminPage() {
     );
   }
 
-  // ── derived: is the current From/To selection invalid? ─────────────────────
+  // ── user actions ──────────────────────────────────────────────────────────
+  function handleApproveUser(u: User) {
+    confirm(
+      `Approve registration for ${u.name} ?`,
+      async () => {
+        try {
+          await approveUser(u._id);
+          setUsers((prev) =>
+            prev.map((user) => (user._id === u._id ? { ...user, profileApproved: true } : user)),
+          );
+        } catch {
+          setOkayMsg('Failed to approve user. Please try again.');
+        }
+      },
+      undefined,
+      'Approve',
+      '#22c55e',
+    );
+  }
+
+  function handleDeleteUser(u: User) {
+    confirm(
+      `Warning! Are you sure you want to delete this user? This could have serious consequences and could affect current or recent bookings. Only delete if user is inactive for more than 60 days.`,
+      async () => {
+        try {
+          await deleteUser(u._id);
+          setUsers((prev) => prev.filter((x) => x._id !== u._id));
+        } catch {
+          setOkayMsg('Failed to delete user. Please try again.');
+        }
+      },
+      undefined,
+      'Remove',
+      '#dc2626',
+    );
+  }
+
+  // ── users sort ────────────────────────────────────────────────────────────
+  function handleUserSort(key: UserSortKey) {
+    if (userSortKey === key) {
+      setUserSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setUserSortKey(key);
+      setUserSortDir('asc');
+    }
+  }
+
+  function getContact(u: User): string {
+    return u.email ?? u.phone ?? '';
+  }
+
+  function sortedUsers(): User[] {
+    return [...users].sort((a, b) => {
+      let cmp = 0;
+      if (userSortKey === 'name') {
+        cmp = a.name.localeCompare(b.name);
+      } else if (userSortKey === 'contact') {
+        const ca = getContact(a);
+        const cb = getContact(b);
+        // emails before phones (emails contain @)
+        const aIsEmail = ca.includes('@');
+        const bIsEmail = cb.includes('@');
+        if (aIsEmail && !bIsEmail) cmp = -1;
+        else if (!aIsEmail && bIsEmail) cmp = 1;
+        else cmp = ca.localeCompare(cb);
+      } else if (userSortKey === 'lastLogin') {
+        const ta = a.lastLogin ? new Date(a.lastLogin).getTime() : 0;
+        const tb = b.lastLogin ? new Date(b.lastLogin).getTime() : 0;
+        cmp = ta - tb;
+      } else if (userSortKey === 'profileApproved') {
+        cmp = a.profileApproved === b.profileApproved ? 0 : a.profileApproved ? -1 : 1;
+      }
+      return userSortDir === 'asc' ? cmp : -cmp;
+    });
+  }
+
   const timeRangeInvalid = parseTime(createFrom) >= parseTime(createTo);
 
-  // ── render ──────────────────────────────────────────────────────────────────
+  // ── comment modal state ───────────────────────────────────────────────────
+  const COMMENT_LIMIT = 150;
+  const [commentModal, setCommentModal] = useState<{
+    open: boolean;
+    userId: string;
+    name: string;
+    value: string;
+  }>({
+    open: false,
+    userId: '',
+    name: '',
+    value: '',
+  });
+  const [commentSaving, setCommentSaving] = useState(false);
+
+  function openCommentModal(u: User) {
+    setCommentModal({ open: true, userId: u._id, name: u.name, value: u.comments ?? '' });
+  }
+
+  function closeCommentModal() {
+    setCommentModal({ open: false, userId: '', name: '', value: '' });
+  }
+
+  async function saveComment() {
+    setCommentSaving(true);
+    try {
+      await addUserComments(commentModal.userId, { comments: commentModal.value.trim() });
+      setUsers((prev) =>
+        prev.map((u) =>
+          u._id === commentModal.userId ? { ...u, comments: commentModal.value.trim() } : u,
+        ),
+      );
+      closeCommentModal();
+    } catch {
+      setOkayMsg('Failed to save comment. Please try again.');
+    } finally {
+      setCommentSaving(false);
+    }
+  }
+
+  const commentIsEmpty = commentModal.value.trim().length === 0;
+  const commentOverLimit = commentModal.value.length > COMMENT_LIMIT;
+  const commentSaveDisabled = commentSaving || commentIsEmpty || commentOverLimit;
+
+  // ── render ────────────────────────────────────────────────────────────────
   return (
     <>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #0d0d0d; }
+        
+        html, body {
+          overflow-x: hidden;
+          max-width: 100%;
+        }
 
         .ap-root { min-height: 100vh; background: #0d0d0d; font-family: 'DM Sans', sans-serif; color: #e0e0e0; }
 
@@ -430,22 +616,11 @@ export default function AdminPage() {
         .ap-email-label { font-size: 12px; color: #555; }
         .ap-email { font-size: 14px; color: #fff; }
         .ap-player-btn {
-          background: #22c55e;
-          color: #000;
-          border: none;
-          border-radius: 7px;
-          padding: 7px 13px;
-          font-family: 'Syne', sans-serif;
-          font-size: 12px;
-          font-weight: 700;
-          cursor: pointer;
-          transition: opacity 0.2s;
-          width: auto;
-          margin: 0;
+          background: #22c55e; color: #000; border: none; border-radius: 7px;
+          padding: 7px 13px; font-family: 'Syne', sans-serif; font-size: 12px;
+          font-weight: 700; cursor: pointer; transition: opacity 0.2s; width: auto; margin: 0;
         }
-
         .ap-player-btn:hover { opacity: 0.85; }
-        
         .ap-btn-ghost {
           background: transparent; border: 1px solid #333; color: #888;
           border-radius: 7px; padding: 7px 13px; font-size: 12px; cursor: pointer;
@@ -453,8 +628,36 @@ export default function AdminPage() {
         }
         .ap-btn-ghost:hover { color: #fff; border-color: #666; }
 
-        .ap-container { max-width: 960px; margin: 0 auto; padding: 24px 16px 60px; }
+        /* ── page-level tabs ── */
+        .ap-page-tabs {
+          background: #111;
+          border-bottom: 1px solid #1e1e1e;
+          padding: 0 20px;
+          display: flex;
+          gap: 0;
+        }
+        .ap-page-tab {
+          background: transparent;
+          border: none;
+          border-bottom: 2px solid transparent;
+          color: #555;
+          font-family: 'Syne', sans-serif;
+          font-size: 13px;
+          font-weight: 700;
+          letter-spacing: 0.3px;
+          padding: 14px 20px 12px;
+          cursor: pointer;
+          transition: color 0.2s, border-color 0.2s;
+          width: auto;
+          margin: 0;
+        }
+        .ap-page-tab:hover { color: #bbb; }
+        .ap-page-tab.active { color: #22c55e; border-bottom-color: #22c55e; }
 
+        .ap-container { max-width: 960px; margin: 0 auto; padding: 24px 16px 60px; }
+        .ap-container.users-tab {
+          max-width: 1200px;
+        }
         .ap-section-title {
           font-family: 'Syne', sans-serif; font-size: 13px; font-weight: 700;
           color: #555; text-transform: uppercase; letter-spacing: 1px;
@@ -500,7 +703,6 @@ export default function AdminPage() {
         .ap-action-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .ap-action-btn:disabled:hover { color: #aaa; border-color: #2a2a2a; background: #1e1e1e; }
 
-        /* ── group amount bar ── */
         .ap-group-amount-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #131313; border: 1px solid #1e1e1e; border-radius: 10px; margin-bottom: 12px; flex-wrap: wrap; }
         .ap-amount-label { font-size: 12px; color: #666; white-space: nowrap; }
         .ap-amount-value { font-family: 'Syne', sans-serif; font-size: 16px; font-weight: 700; color: #22c55e; }
@@ -510,7 +712,6 @@ export default function AdminPage() {
         .ap-amount-edit-btn { background: transparent; border: 1px solid #2a2a2a; color: #666; border-radius: 6px; padding: 5px 10px; font-size: 11px; cursor: pointer; transition: all 0.2s; width: auto; margin: 0; }
         .ap-amount-edit-btn:hover { color: #fff; border-color: #444; }
 
-        /* ── players summary ── */
         .ap-players-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
         .ap-player-chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; font-weight: 500; }
         .ap-player-chip.filled { background: #ffedd5; color: #9a3412; }
@@ -520,19 +721,18 @@ export default function AdminPage() {
         .ap-paid-coin.paid   { color: #22c55e; background: #22c55e18; border: 1.5px solid #22c55e; }
         .ap-paid-coin.unpaid { color: #ef4444; background: #ef444418; border: 1.5px solid #ef4444; }
 
-        /* ── apply amounts modal ── */
         .ap-apply-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 9997; padding: 16px; }
         .ap-apply-modal { background: #161616; border: 1px solid #2a2a2a; border-radius: 16px; padding: 20px; width: 100%; max-width: 480px; box-shadow: 0 30px 80px rgba(0,0,0,0.7); display: flex; flex-direction: column; gap: 16px; max-height: 90vh; }
         .ap-apply-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 800; color: #f0f0f0; }
-        .ap-apply-subtitle { font-size: 12px; color: #555; margin-top: 2px; }
-
+        .ap-apply-subtitle { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 800; color: #22c55e; }
+        .ap-apply-subtitle-info { font-size: 12px; color: #555; margin-top: 2px; }
         .ap-apply-list { overflow-y: auto; max-height: 340px; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
         .ap-apply-list::-webkit-scrollbar { width: 4px; }
         .ap-apply-list::-webkit-scrollbar-track { background: #111; border-radius: 4px; }
         .ap-apply-list::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
-
-        .ap-apply-row { display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 10px; padding: 8px 10px; background: #1a1a1a; border: 1px solid #222; border-radius: 8px; }
+        .ap-apply-row { display: grid; grid-template-columns: 28px 1fr 120px; align-items: center; gap: 10px; padding: 8px 10px; background: #1a1a1a; border: 1px solid #222; border-radius: 8px; }
         .ap-apply-row.wl-disabled { opacity: 0.45; }
+        .ap-apply-serial { font-size: 11px; font-weight: 700; color: #444; text-align: center; font-family: 'Syne', sans-serif; }
         .ap-apply-name { font-size: 13px; color: #d0d0d0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .ap-apply-sublabel { font-size: 10px; color: #555; margin-top: 1px; }
         .ap-apply-amt-wrap { display: flex; align-items: center; gap: 4px; }
@@ -540,23 +740,17 @@ export default function AdminPage() {
         .ap-apply-amt-input { flex: 1; min-width: 0; width: 0; padding: 6px 8px; background: #111; border: 1px solid #2e2e2e; border-radius: 6px; color: #f0f0f0; font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; transition: border-color 0.2s; margin: 0; }
         .ap-apply-amt-input:focus { border-color: #22c55e; }
         .ap-apply-amt-input:disabled { opacity: 0.4; cursor: not-allowed; }
-
-        /* waitlist toggle */
         .ap-wl-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #1a1a1a; border: 1px solid #222; border-radius: 8px; cursor: pointer; user-select: none; }
         .ap-wl-toggle input[type="checkbox"] { width: 15px; height: 15px; accent-color: #22c55e; cursor: pointer; margin: 0; }
         .ap-wl-toggle-label { font-size: 13px; color: #aaa; }
-
-        /* total preview */
         .ap-apply-total { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #111; border-radius: 8px; border: 1px solid #1e1e1e; }
         .ap-apply-total-label { font-size: 12px; color: #555; }
         .ap-apply-total-value { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; color: #22c55e; }
-
         .ap-apply-footer { display: flex; gap: 10px; }
         .ap-apply-save { flex: 1; padding: 10px; background: #22c55e; color: #000; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0; transition: opacity 0.15s; }
         .ap-apply-save:hover { opacity: 0.85; }
         .ap-apply-cancel { flex: 1; padding: 10px; background: #2a2a2a; color: #aaa; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0; }
 
-        /* ── archive ── */
         .ap-archive-card { background: #111; border: 1px solid #1e1e1e; border-radius: 12px; margin-bottom: 8px; overflow: hidden; transition: border-color 0.2s; }
         .ap-archive-card:hover { border-color: #2a2a2a; }
         .ap-archive-summary { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; cursor: pointer; user-select: none; gap: 12px; }
@@ -570,7 +764,6 @@ export default function AdminPage() {
         .ap-archive-players { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
         .ap-archive-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 
-        /* ── empty / loader / modals ── */
         .ap-empty { text-align: center; color: #444; font-size: 14px; padding: 40px 0; }
         .ap-loader { position: fixed; inset: 0; background: rgba(13,13,13,0.85); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; gap: 12px; }
         .ap-spinner { width: 28px; height: 28px; border: 3px solid #222; border-top-color: #22c55e; border-radius: 50%; animation: spin 0.8s linear infinite; }
@@ -583,6 +776,253 @@ export default function AdminPage() {
         .ap-modal-btn { flex: 1; padding: 10px; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity 0.15s; width: auto; margin: 0; }
         .ap-modal-btn:hover { opacity: 0.85; }
         .ap-modal-cancel { background: #2a2a2a; color: #aaa; }
+
+        /* ── users table ── */
+        .usr-table-wrap {
+          overflow-x: auto;
+          border-radius: 14px;
+          border: 1px solid #1e1e1e;
+        }
+        .usr-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+        .usr-table thead tr {
+          background: #111;
+          border-bottom: 1px solid #222;
+        }
+        .usr-table th {
+          padding: 12px 14px;
+          text-align: left;
+          font-family: 'Syne', sans-serif;
+          font-size: 11px;
+          font-weight: 700;
+          color: #555;
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+          white-space: nowrap;
+          user-select: none;
+        }
+        .usr-table th.center { text-align: center; }
+        .usr-table td {
+          padding: 12px 14px;
+          border-bottom: 1px solid #1a1a1a;
+          color: #ccc;
+          vertical-align: middle;
+        }
+        .usr-table td.center { text-align: center; }
+        .usr-table tbody tr { background: #161616; transition: background 0.15s; }
+        .usr-table tbody tr:last-child td { border-bottom: none; }
+        .usr-table tbody tr:hover { background: #1c1c1c; }
+
+        .usr-th-inner {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+        }
+
+        .usr-sort-arrow {
+          font-size: 12px;
+          color: #444;
+          cursor: pointer;
+          padding: 2px 4px;
+          border-radius: 4px;
+          transition: color 0.15s, background 0.15s;
+          line-height: 1;
+          display: inline-block;
+        }
+        .usr-sort-arrow:hover { color: #bbb; background: #222; }
+        .usr-sort-arrow.active { color: #22c55e; }
+
+        .usr-sl { font-size: 12px; color: #444; font-weight: 600; }
+        .usr-name { font-weight: 600; color: #f0f0f0; }
+        .usr-contact { font-family: 'DM Sans', sans-serif; font-size: 12px; color: #888; }
+        .usr-login { font-size: 12px; color: #666; white-space: nowrap; }
+        .usr-login-never { font-size: 12px; color: #333; font-style: italic; }
+        .usr-remove-txt { font-family: 'DM Sans', sans-serif; font-size: 12px; color: #888; }
+
+        .usr-status-approved {
+          display: inline-block;
+          background: #22c55e18;
+          border: 1px solid #22c55e44;
+          color: #4ade80;
+          font-family: 'Syne', sans-serif;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.5px;
+          padding: 4px 10px;
+          border-radius: 999px;
+        }
+        .usr-approve-btn {
+          background: #f59e0b18;
+          border: 1px solid #f59e0b55;
+          color: #fbbf24;
+          font-family: 'Syne', sans-serif;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.5px;
+          padding: 5px 12px;
+          border-radius: 999px;
+          cursor: pointer;
+          transition: background 0.15s, border-color 0.15s, transform 0.1s;
+          width: auto;
+          margin: 0;
+        }
+        .usr-approve-btn:hover {
+          background: #f59e0b30;
+          border-color: #f59e0b99;
+          transform: translateY(-1px);
+        }
+        .usr-approve-btn:active { transform: translateY(0); }
+
+        .usr-remove-btn {
+          background: transparent;
+          border: none;
+          cursor: pointer;
+          font-size: 15px;
+          padding: 4px 6px;
+          opacity: 0.6;
+          transition: opacity 0.15s, transform 0.1s;
+          width: auto;
+          margin: 0;
+          line-height: 1;
+        }
+        .usr-remove-btn:hover { opacity: 1; transform: scale(1.1); }
+
+        .usr-loader { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 48px 0; color: #444; font-size: 14px; }
+        .usr-spinner { width: 20px; height: 20px; border: 2px solid #222; border-top-color: #22c55e; border-radius: 50%; animation: spin 0.8s linear infinite; }
+        .usr-empty { text-align: center; color: #444; font-size: 14px; padding: 40px 0; }
+
+        /* ── comments cell ── */
+        .usr-comment-cell {
+          cursor: pointer;
+          max-width: 220px;
+        }
+        .usr-comment-preview {
+          font-size: 12px;
+          color: #666;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          max-width: 100%;
+          display: block;
+          transition: color 0.15s;
+        }
+        .usr-comment-empty {
+          font-size: 12px;
+          color: #2a2a2a;
+          font-style: italic;
+          transition: color 0.15s;
+        }
+        .usr-comment-cell:hover .usr-comment-preview,
+        .usr-comment-cell:hover .usr-comment-empty {
+          color: #888;
+        }
+
+        /* ── comment edit modal ── */
+        .usr-comment-backdrop {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.72);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+          padding: 20px;
+          animation: fadeIn 0.15s ease;
+        }
+        .usr-comment-modal {
+          background: #1a1a1a;
+          border: 1px solid #2a2a2a;
+          border-radius: 16px;
+          padding: 24px;
+          width: 100%;
+          max-width: 420px;
+          box-shadow: 0 30px 80px rgba(0,0,0,0.8);
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          animation: slideUp 0.2s cubic-bezier(0.16,1,0.3,1);
+        }
+        .usr-comment-modal-title {
+          font-family: 'Syne', sans-serif;
+          font-size: 14px;
+          font-weight: 800;
+          color: #f0f0f0;
+          letter-spacing: -0.2px;
+        }
+        .usr-comment-modal-name {
+          font-size: 12px;
+          color: #555;
+          margin-top: 2px;
+        }
+        .usr-comment-textarea {
+          width: 100%;
+          min-height: 100px;
+          padding: 10px 12px;
+          background: #111;
+          border: 1px solid #2e2e2e;
+          border-radius: 10px;
+          color: #f0f0f0;
+          font-family: 'DM Sans', sans-serif;
+          font-size: 13px;
+          line-height: 1.5;
+          outline: none;
+          resize: vertical;
+          transition: border-color 0.2s;
+          margin: 0;
+        }
+        .usr-comment-textarea:focus { border-color: #22c55e; }
+        .usr-comment-textarea.over-limit { border-color: #ef4444; }
+        .usr-comment-footer {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .usr-comment-char-count {
+          font-size: 11px;
+          color: #555;
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+        .usr-comment-char-count.at-limit { color: #ef4444; font-weight: 700; }
+        .usr-comment-actions {
+          display: flex;
+          gap: 8px;
+        }
+        .usr-comment-save {
+          padding: 8px 18px;
+          background: #22c55e;
+          color: #000;
+          border: none;
+          border-radius: 8px;
+          font-family: 'Syne', sans-serif;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: opacity 0.15s;
+          width: auto;
+          margin: 0;
+        }
+        .usr-comment-save:hover:not(:disabled) { opacity: 0.85; }
+        .usr-comment-save:disabled { opacity: 0.3; cursor: not-allowed; }
+        .usr-comment-cancel {
+          padding: 8px 16px;
+          background: #252525;
+          color: #888;
+          border: none;
+          border-radius: 8px;
+          font-family: 'Syne', sans-serif;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s;
+          width: auto;
+          margin: 0;
+        }
+        .usr-comment-cancel:hover { background: #2e2e2e; color: #ccc; }
       `}</style>
 
       {/* Loader */}
@@ -645,72 +1085,19 @@ export default function AdminPage() {
       {applyModal.open &&
         (() => {
           const runningTotal = applyModal.rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+          const playerCount = applyModal.rows.filter((p) => !p.isWaitList).length;
           return (
             <div className="ap-apply-backdrop">
               <div className="ap-apply-modal">
                 <div>
-                  <div className="ap-apply-title">Apply Player Amounts</div>
-                  <div className="ap-apply-subtitle">
+                  <div className="ap-apply-title">Apply Player Amounts:</div>
+                  <div className="ap-apply-subtitle">{`(${applyModal.includeWaitlist ? applyModal.rows.length : playerCount} Players total)`}</div>
+                  <div className="ap-apply-subtitle-info">
                     Amounts split equally across main players. Adjust individually if needed.
                   </div>
                 </div>
-
-                <div className="ap-apply-list">
-                  {applyModal.rows.map((row, idx) => {
-                    const isWlDisabled = row.isWaitList && !applyModal.includeWaitlist;
-                    return (
-                      <div
-                        key={`${row.slotId}-${row.playerId}`}
-                        className={`ap-apply-row${isWlDisabled ? ' wl-disabled' : ''}`}
-                      >
-                        <div>
-                          <div className="ap-apply-name">{row.name}</div>
-                          {row.isWaitList && <div className="ap-apply-sublabel">Waitlist</div>}
-                        </div>
-                        <div className="ap-apply-amt-wrap">
-                          <span className="ap-apply-amt-symbol">$</span>
-                          <input
-                            className="ap-apply-amt-input"
-                            type="number"
-                            min={0}
-                            step={0.01}
-                            value={row.amount}
-                            disabled={isWlDisabled}
-                            onChange={(e) => updateApplyRow(idx, e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {applyModal.rows.length === 0 && (
-                    <div
-                      style={{
-                        color: '#444',
-                        fontSize: '13px',
-                        textAlign: 'center',
-                        padding: '20px 0',
-                      }}
-                    >
-                      No players in this session yet.
-                    </div>
-                  )}
-                </div>
-
-                {/* Waitlist toggle */}
-                <label className="ap-wl-toggle">
-                  <input
-                    type="checkbox"
-                    checked={applyModal.includeWaitlist}
-                    onChange={(e) => toggleIncludeWaitlist(e.target.checked)}
-                  />
-                  <span className="ap-wl-toggle-label">
-                    Include waitlisted players in this payment
-                  </span>
-                </label>
-
-                {/* Running total — click to re-enter and redistribute */}
                 <div className="ap-apply-total">
-                  <span className="ap-apply-total-label">Total across all players</span>
+                  <span className="ap-apply-total-label">Total amount for all players</span>
                   {editingTotal ? (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       <span style={{ color: '#555', fontSize: '13px' }}>$</span>
@@ -756,6 +1143,57 @@ export default function AdminPage() {
                     </span>
                   )}
                 </div>
+                <div className="ap-apply-list">
+                  {applyModal.rows.map((row, idx) => {
+                    const isWlDisabled = row.isWaitList && !applyModal.includeWaitlist;
+                    return (
+                      <div
+                        key={`${row.slotId}-${row.playerId}`}
+                        className={`ap-apply-row${isWlDisabled ? ' wl-disabled' : ''}`}
+                      >
+                        <span className="ap-apply-serial">{idx + 1}</span>
+                        <div>
+                          <div className="ap-apply-name">{row.name}</div>
+                          {row.isWaitList && <div className="ap-apply-sublabel">Waitlist</div>}
+                        </div>
+                        <div className="ap-apply-amt-wrap">
+                          <span className="ap-apply-amt-symbol">$</span>
+                          <input
+                            className="ap-apply-amt-input"
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={row.amount}
+                            disabled={isWlDisabled}
+                            onChange={(e) => updateApplyRow(idx, e.target.value)}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {applyModal.rows.length === 0 && (
+                    <div
+                      style={{
+                        color: '#444',
+                        fontSize: '13px',
+                        textAlign: 'center',
+                        padding: '20px 0',
+                      }}
+                    >
+                      No players in this session yet.
+                    </div>
+                  )}
+                </div>
+                <label className="ap-wl-toggle">
+                  <input
+                    type="checkbox"
+                    checked={applyModal.includeWaitlist}
+                    onChange={(e) => toggleIncludeWaitlist(e.target.checked)}
+                  />
+                  <span className="ap-wl-toggle-label">
+                    Include waitlisted players in this payment
+                  </span>
+                </label>
 
                 <div className="ap-apply-footer">
                   <button className="ap-apply-save" onClick={saveApplyModal}>
@@ -776,7 +1214,41 @@ export default function AdminPage() {
             </div>
           );
         })()}
-
+      {/* Comment edit modal */}
+      {commentModal.open && (
+        <div className="usr-comment-backdrop" onClick={closeCommentModal}>
+          <div className="usr-comment-modal" onClick={(e) => e.stopPropagation()}>
+            <div>
+              <div className="usr-comment-modal-title">Edit Comment</div>
+              <div className="usr-comment-modal-name">{commentModal.name}</div>
+            </div>
+            <textarea
+              className={`usr-comment-textarea${commentOverLimit ? ' over-limit' : ''}`}
+              autoFocus
+              value={commentModal.value}
+              onChange={(e) => setCommentModal((prev) => ({ ...prev, value: e.target.value }))}
+              placeholder="Add a note about this user..."
+            />
+            <div className="usr-comment-footer">
+              <span className={`usr-comment-char-count${commentOverLimit ? ' at-limit' : ''}`}>
+                {commentModal.value.length}/{COMMENT_LIMIT}
+              </span>
+              <div className="usr-comment-actions">
+                <button className="usr-comment-cancel" onClick={closeCommentModal}>
+                  Cancel
+                </button>
+                <button
+                  className="usr-comment-save"
+                  disabled={commentSaveDisabled}
+                  onClick={saveComment}
+                >
+                  {commentSaving ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="ap-root">
         {/* Top bar */}
         <div className="ap-topbar">
@@ -795,399 +1267,571 @@ export default function AdminPage() {
           </div>
         </div>
 
-        <div className="ap-container">
-          {/* ── Create booking ── */}
-          <p className="ap-section-title">Create Court Booking</p>
-          <div className="ap-create-card">
-            <form onSubmit={handleCreate}>
-              <div className="ap-form-grid">
-                <div className="ap-form-field">
-                  <label>Date</label>
-                  <input
-                    type="date"
-                    className="ap-input"
-                    value={createDate}
-                    min={new Date().toISOString().split('T')[0]}
-                    onChange={(e) => setCreateDate(e.target.value)}
-                    required
-                  />
-                </div>
-                <div className="ap-form-field">
-                  <label>From</label>
-                  <select
-                    className={`ap-input${timeRangeInvalid ? ' invalid' : ''}`}
-                    value={createFrom}
-                    onChange={(e) => setCreateFrom(e.target.value)}
-                  >
-                    {[
-                      '7:00 AM',
-                      '8:00 AM',
-                      '9:00 AM',
-                      '10:00 AM',
-                      '11:00 AM',
-                      '12:00 PM',
-                      '1:00 PM',
-                      '2:00 PM',
-                      '3:00 PM',
-                      '4:00 PM',
-                      '5:00 PM',
-                      '6:00 PM',
-                      '7:00 PM',
-                      '8:00 PM',
-                      '11:00 PM',
-                    ].map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="ap-form-field">
-                  <label>To</label>
-                  <select
-                    className={`ap-input${timeRangeInvalid ? ' invalid' : ''}`}
-                    value={createTo}
-                    onChange={(e) => setCreateTo(e.target.value)}
-                  >
-                    {[
-                      '7:00 AM',
-                      '8:00 AM',
-                      '9:00 AM',
-                      '10:00 AM',
-                      '11:00 AM',
-                      '12:00 PM',
-                      '1:00 PM',
-                      '2:00 PM',
-                      '3:00 PM',
-                      '4:00 PM',
-                      '5:00 PM',
-                      '6:00 PM',
-                      '7:00 PM',
-                      '8:00 PM',
-                      '9:00 PM',
-                      '11:00 PM',
-                    ].map((t) => (
-                      <option key={t} value={t}>
-                        {t}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="ap-form-field">
-                  <label>Courts</label>
-                  <input
-                    type="number"
-                    className="ap-input"
-                    min={1}
-                    max={10}
-                    value={createCourts}
-                    onChange={(e) => setCreateCourts(Number(e.target.value))}
-                  />
-                </div>
-                <div className="ap-form-field">
-                  <label>&nbsp;</label>
-                  <button
-                    type="submit"
-                    className="ap-create-btn"
-                    disabled={creating || timeRangeInvalid}
-                  >
-                    {creating ? '...' : '＋ Create'}
-                  </button>
-                </div>
-              </div>
-              {timeRangeInvalid && (
-                <div className="ap-time-error">
-                  ⚠ &ldquo;To&rdquo; must be after &ldquo;From&rdquo;
-                </div>
-              )}
-            </form>
-          </div>
+        {/* Page-level tabs */}
+        <div className="ap-page-tabs">
+          <button
+            className={`ap-page-tab${activeTab === 'slots' ? ' active' : ''}`}
+            onClick={() => setActiveTab('slots')}
+          >
+            📅 Slots &amp; Bookings
+          </button>
+          <button
+            className={`ap-page-tab${activeTab === 'users' ? ' active' : ''}`}
+            onClick={() => setActiveTab('users')}
+          >
+            👥 Registered Users
+          </button>
+        </div>
 
-          {/* ── Manage bookings ── */}
-          <p className="ap-section-title">Manage Bookings</p>
-
-          {Object.keys(groupedSlots).length === 0 && !loading ? (
-            <p className="ap-empty">No bookings yet. Create one above.</p>
-          ) : (
-            Object.entries(groupedSlots)
-              .filter(([, slots]) => slots.some((s) => !s.slotArchived))
-              .sort(([, a], [, b]) => {
-                const da = new Date(`${a[0].date} ${a[0].time.split('–')[0].trim()}`);
-                const db = new Date(`${b[0].date} ${b[0].time.split('–')[0].trim()}`);
-                return da.getTime() - db.getTime();
-              })
-              .map(([key, slots]) => {
-                const activeSlots = slots.filter((s) => !s.slotArchived);
-                const first = activeSlots[0];
-                const groupKey = `${first.date}__${first.time}`;
-                const displayTotal = getDisplayTotal(activeSlots);
-                const isEditingAmt = editAmtKey === groupKey;
-
-                return (
-                  <div key={key} className="ap-group">
-                    <div className="ap-group-label">
-                      📅 {first.date} · {first.time}
-                      <span style={{ color: '#444', fontSize: '12px' }}>
-                        ({activeSlots.length} court{activeSlots.length > 1 ? 's' : ''})
-                      </span>
+        <div className={`ap-container${activeTab === 'users' ? ' users-tab' : ''}`}>
+          {/* ══════════════════════ SLOTS & BOOKINGS TAB ══════════════════════ */}
+          {activeTab === 'slots' && (
+            <>
+              {/* Create */}
+              <p className="ap-section-title">Create Court Booking</p>
+              <div className="ap-create-card">
+                <form onSubmit={handleCreate}>
+                  <div className="ap-form-grid">
+                    <div className="ap-form-field">
+                      <label>Date</label>
+                      <input
+                        type="date"
+                        className="ap-input"
+                        value={createDate}
+                        min={new Date().toISOString().split('T')[0]}
+                        onChange={(e) => setCreateDate(e.target.value)}
+                        required
+                      />
                     </div>
-
-                    {/* Amount bar — one per group */}
-                    <div className="ap-group-amount-bar">
-                      <span className="ap-amount-label">Total Amount:</span>
-                      {isEditingAmt ? (
-                        <>
-                          <span style={{ color: '#555', fontSize: '13px' }}>$</span>
-                          <input
-                            autoFocus
-                            className="ap-amount-input"
-                            type="number"
-                            min={0}
-                            step={0.01}
-                            value={editAmtValue}
-                            onChange={(e) => setEditAmtValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' && parseFloat(editAmtValue) > 0)
-                                openApplyModal(groupKey, slots, parseFloat(editAmtValue));
-                              if (e.key === 'Escape') setEditAmtKey(null);
-                            }}
-                          />
-                          <button
-                            className="ap-amount-save"
-                            disabled={!editAmtValue || parseFloat(editAmtValue) <= 0}
-                            onClick={() =>
-                              openApplyModal(groupKey, slots, parseFloat(editAmtValue))
-                            }
-                          >
-                            Save
-                          </button>
-                          <button
-                            className="ap-amount-edit-btn"
-                            onClick={() => setEditAmtKey(null)}
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <span className="ap-amount-value">
-                            {displayTotal > 0 ? `$${fmt(displayTotal)}` : '—'}
-                          </span>
-                          <button
-                            className="ap-amount-edit-btn"
-                            onClick={() => {
-                              setEditAmtKey(groupKey);
-                              setEditAmtValue('');
-                            }}
-                          >
-                            ✏️ Edit
-                          </button>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Court cards */}
-                    {activeSlots.map((slot, ci) => (
-                      <div
-                        key={slot._id}
-                        className={`ap-slot-card${slot.slotLocked ? ' locked' : ''}${slot.slotHidden ? ' hidden' : ''}`}
+                    <div className="ap-form-field">
+                      <label>From</label>
+                      <select
+                        className={`ap-input${timeRangeInvalid ? ' invalid' : ''}`}
+                        value={createFrom}
+                        onChange={(e) => setCreateFrom(e.target.value)}
                       >
-                        <div className="ap-slot-header">
-                          <div className="ap-slot-title">
-                            Court{' '}
-                            {editingCourtId === slot._id ? (
+                        {[
+                          '7:00 AM',
+                          '8:00 AM',
+                          '9:00 AM',
+                          '10:00 AM',
+                          '11:00 AM',
+                          '12:00 PM',
+                          '1:00 PM',
+                          '2:00 PM',
+                          '3:00 PM',
+                          '4:00 PM',
+                          '5:00 PM',
+                          '6:00 PM',
+                          '7:00 PM',
+                          '8:00 PM',
+                          '11:00 PM',
+                        ].map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="ap-form-field">
+                      <label>To</label>
+                      <select
+                        className={`ap-input${timeRangeInvalid ? ' invalid' : ''}`}
+                        value={createTo}
+                        onChange={(e) => setCreateTo(e.target.value)}
+                      >
+                        {[
+                          '7:00 AM',
+                          '8:00 AM',
+                          '9:00 AM',
+                          '10:00 AM',
+                          '11:00 AM',
+                          '12:00 PM',
+                          '1:00 PM',
+                          '2:00 PM',
+                          '3:00 PM',
+                          '4:00 PM',
+                          '5:00 PM',
+                          '6:00 PM',
+                          '7:00 PM',
+                          '8:00 PM',
+                          '9:00 PM',
+                          '11:00 PM',
+                        ].map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="ap-form-field">
+                      <label>Courts</label>
+                      <input
+                        type="number"
+                        className="ap-input"
+                        min={1}
+                        max={10}
+                        value={createCourts}
+                        onChange={(e) => setCreateCourts(Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="ap-form-field">
+                      <label>&nbsp;</label>
+                      <button
+                        type="submit"
+                        className="ap-create-btn"
+                        disabled={creating || timeRangeInvalid}
+                      >
+                        {creating ? '...' : '＋ Create'}
+                      </button>
+                    </div>
+                  </div>
+                  {timeRangeInvalid && (
+                    <div className="ap-time-error">
+                      ⚠ &ldquo;To&rdquo; must be after &ldquo;From&rdquo;
+                    </div>
+                  )}
+                </form>
+              </div>
+
+              {/* Manage */}
+              <p className="ap-section-title">Manage Bookings</p>
+              {Object.keys(groupedSlots).length === 0 && !loading ? (
+                <p className="ap-empty">No bookings yet. Create one above.</p>
+              ) : (
+                Object.entries(groupedSlots)
+                  .filter(([, slots]) => slots.some((s) => !s.slotArchived))
+                  .sort(([, a], [, b]) => {
+                    const da = new Date(`${a[0].date} ${a[0].time.split('–')[0].trim()}`);
+                    const db = new Date(`${b[0].date} ${b[0].time.split('–')[0].trim()}`);
+                    return da.getTime() - db.getTime();
+                  })
+                  .map(([key, slots]) => {
+                    const activeSlots = slots.filter((s) => !s.slotArchived);
+                    const first = activeSlots[0];
+                    const groupKey = `${first.date}__${first.time}`;
+                    const displayTotal = getDisplayTotal(activeSlots);
+                    const isEditingAmt = editAmtKey === groupKey;
+                    return (
+                      <div key={key} className="ap-group">
+                        <div className="ap-group-label">
+                          📅 {first.date} · {first.time}
+                          <span style={{ color: '#444', fontSize: '12px' }}>
+                            ({activeSlots.length} court{activeSlots.length > 1 ? 's' : ''})
+                          </span>
+                        </div>
+                        <div className="ap-group-amount-bar">
+                          <span className="ap-amount-label">Total Amount (inc. birdies+tax):</span>
+                          {isEditingAmt ? (
+                            <>
+                              <span style={{ color: '#555', fontSize: '13px' }}>$</span>
                               <input
                                 autoFocus
-                                className="ap-court-no-input"
+                                className="ap-amount-input"
                                 type="number"
-                                min={1}
-                                max={9}
-                                value={editingCourtValue}
-                                onChange={(e) => setEditingCourtValue(e.target.value)}
+                                min={0}
+                                step={0.01}
+                                value={editAmtValue}
+                                onChange={(e) => setEditAmtValue(e.target.value)}
                                 onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleCourtNoSave(slot, editingCourtValue);
-                                  if (e.key === 'Escape') setEditingCourtId(null);
-                                }}
-                                onBlur={() => {
-                                  if (editingCourtValue !== '')
-                                    handleCourtNoSave(slot, editingCourtValue);
-                                  else setEditingCourtId(null);
+                                  if (e.key === 'Enter' && parseFloat(editAmtValue) > 0)
+                                    openApplyModal(groupKey, slots, parseFloat(editAmtValue));
+                                  if (e.key === 'Escape') setEditAmtKey(null);
                                 }}
                               />
-                            ) : (
-                              <span
-                                className="ap-court-no"
-                                title="Click to edit court number"
+                              <button
+                                className="ap-amount-save"
+                                disabled={!editAmtValue || parseFloat(editAmtValue) <= 0}
+                                onClick={() =>
+                                  openApplyModal(groupKey, slots, parseFloat(editAmtValue))
+                                }
+                              >
+                                Save
+                              </button>
+                              <button
+                                className="ap-amount-edit-btn"
+                                onClick={() => setEditAmtKey(null)}
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <span className="ap-amount-value">
+                                {displayTotal > 0 ? `$${fmt(displayTotal)}` : '—'}
+                              </span>
+                              <button
+                                className="ap-amount-edit-btn"
                                 onClick={() => {
-                                  setEditingCourtId(slot._id);
-                                  setEditingCourtValue(
-                                    String(slot.courtNo > 0 ? slot.courtNo : ci + 1),
-                                  );
+                                  setEditAmtKey(groupKey);
+                                  setEditAmtValue('');
                                 }}
                               >
-                                {slot.courtNo > 0 ? slot.courtNo : ci + 1}
-                              </span>
-                            )}
-                            {slot.slotLocked && <span className="ap-tag locked">LOCKED</span>}
-                            {slot.slotHidden && <span className="ap-tag hidden">HIDDEN</span>}
-                          </div>
-                          <div className="ap-slot-actions">
-                            <button
-                              className={`ap-action-btn ${slot.slotLocked ? 'success' : 'warn'}`}
-                              onClick={() => handleLock(slot)}
-                            >
-                              {slot.slotLocked ? '🔓 Unlock' : '🔒 Lock'}
-                            </button>
-                            <button
-                              className={`ap-action-btn ${slot.slotHidden ? 'success' : ''}`}
-                              onClick={() => handleHide(slot)}
-                            >
-                              {slot.slotHidden ? '👁 Show' : '🙈 Hide'}
-                            </button>
-                            <button className="ap-action-btn" onClick={() => handleArchive(slot)}>
-                              📦 Archive
-                            </button>
-                            <button
-                              className="ap-action-btn danger"
-                              onClick={() => handleDelete(slot)}
-                            >
-                              🗑 Delete
-                            </button>
-                          </div>
+                                ✏️ Edit
+                              </button>
+                            </>
+                          )}
                         </div>
-
-                        <div className="ap-players-summary">
-                          {slot.players.map((p: Player, i: number) => (
-                            <span
-                              key={i}
-                              className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                            >
-                              {p.name || `P${i + 1} open`}
-                              {p.name && (
-                                <span className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}>
-                                  {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
-                                </span>
-                              )}
-                            </span>
-                          ))}
-                          {slot.waitList
-                            .filter((p: Player) => p.name)
-                            .map((p: Player, i: number) => (
-                              <span
-                                key={i}
-                                className="ap-player-chip wl"
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                              >
-                                WL{i + 1}: {p.name}
-                                <span className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}>
-                                  {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
-                                </span>
-                              </span>
-                            ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })
-          )}
-
-          {/* ── Archived bookings ── */}
-          {(() => {
-            const archived = Object.values(groupedSlots)
-              .flat()
-              .filter((s) => s.slotArchived)
-              .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-            if (archived.length === 0) return null;
-            return (
-              <>
-                <p className="ap-section-title">Archived Bookings</p>
-                {archived.map((slot, ci) => {
-                  const isExpanded = expandedArchiveIds.has(slot._id);
-                  const slotTotal = [...slot.players, ...slot.waitList].reduce(
-                    (s, p) => s + (p.playerAmt ?? 0),
-                    0,
-                  );
-                  return (
-                    <div key={slot._id} className="ap-archive-card">
-                      <div
-                        className="ap-archive-summary"
-                        onClick={() => toggleArchiveExpand(slot._id)}
-                      >
-                        <div className="ap-archive-meta">
-                          <span className="ap-archive-date">{slot.date}</span>
-                          <span className="ap-archive-time">{slot.time}</span>
-                          <span className="ap-archive-court">
-                            Court {slot.courtNo > 0 ? slot.courtNo : ci + 1}
-                          </span>
-                        </div>
-                        <span className={`ap-archive-chevron${isExpanded ? ' open' : ''}`}>▼</span>
-                      </div>
-                      {isExpanded && (
-                        <div className="ap-archive-body">
-                          <div className="ap-group-amount-bar" style={{ marginTop: '4px' }}>
-                            <span className="ap-amount-label">Total Amount:</span>
-                            <span className="ap-amount-value">
-                              {slotTotal > 0 ? `$${fmt(slotTotal)}` : '—'}
-                            </span>
-                          </div>
-                          <div className="ap-archive-players">
-                            {slot.players.map((p: Player, i: number) => (
-                              <span
-                                key={i}
-                                className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
-                                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
-                              >
-                                {p.name || `P${i + 1} open`}
-                                {p.name && (
-                                  <span className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}>
-                                    {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                        {activeSlots.map((slot, ci) => (
+                          <div
+                            key={slot._id}
+                            className={`ap-slot-card${slot.slotLocked ? ' locked' : ''}${slot.slotHidden ? ' hidden' : ''}`}
+                          >
+                            <div className="ap-slot-header">
+                              <div className="ap-slot-title">
+                                Court{' '}
+                                {editingCourtId === slot._id ? (
+                                  <input
+                                    autoFocus
+                                    className="ap-court-no-input"
+                                    type="number"
+                                    min={1}
+                                    max={9}
+                                    value={editingCourtValue}
+                                    onChange={(e) => setEditingCourtValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter')
+                                        handleCourtNoSave(slot, editingCourtValue);
+                                      if (e.key === 'Escape') setEditingCourtId(null);
+                                    }}
+                                    onBlur={() => {
+                                      if (editingCourtValue !== '')
+                                        handleCourtNoSave(slot, editingCourtValue);
+                                      else setEditingCourtId(null);
+                                    }}
+                                  />
+                                ) : (
+                                  <span
+                                    className="ap-court-no"
+                                    title="Click to edit court number"
+                                    onClick={() => {
+                                      setEditingCourtId(slot._id);
+                                      setEditingCourtValue(
+                                        String(slot.courtNo > 0 ? slot.courtNo : ci + 1),
+                                      );
+                                    }}
+                                  >
+                                    {slot.courtNo > 0 ? slot.courtNo : ci + 1}
                                   </span>
                                 )}
-                              </span>
-                            ))}
-                            {slot.waitList
-                              .filter((p: Player) => p.name)
-                              .map((p: Player, i: number) => (
+                                {slot.slotLocked && <span className="ap-tag locked">LOCKED</span>}
+                                {slot.slotHidden && <span className="ap-tag hidden">HIDDEN</span>}
+                              </div>
+                              <div className="ap-slot-actions">
+                                <button
+                                  className={`ap-action-btn ${slot.slotLocked ? 'success' : 'warn'}`}
+                                  onClick={() => handleLock(slot)}
+                                >
+                                  {slot.slotLocked ? '🔓 Unlock' : '🔒 Lock'}
+                                </button>
+                                <button
+                                  className={`ap-action-btn ${slot.slotHidden ? 'success' : ''}`}
+                                  onClick={() => handleHide(slot)}
+                                >
+                                  {slot.slotHidden ? '👁 Show' : '🙈 Hide'}
+                                </button>
+                                <button
+                                  className="ap-action-btn"
+                                  onClick={() => handleArchive(slot)}
+                                >
+                                  📦 Archive
+                                </button>
+                                <button
+                                  className="ap-action-btn danger"
+                                  onClick={() => handleDelete(slot)}
+                                >
+                                  🗑 Delete
+                                </button>
+                              </div>
+                            </div>
+                            <div className="ap-players-summary">
+                              {slot.players.map((p: Player, i: number) => (
                                 <span
                                   key={i}
-                                  className="ap-player-chip wl"
+                                  className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
                                   style={{
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: '5px',
                                   }}
                                 >
-                                  WL{i + 1}: {p.name}
-                                  <span className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}>
-                                    {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
-                                  </span>
+                                  {p.name || `P${i + 1} open`}
+                                  {p.name && (
+                                    <span
+                                      className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                    >
+                                      {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                    </span>
+                                  )}
                                 </span>
                               ))}
+                              {slot.waitList
+                                .filter((p: Player) => p.name)
+                                .map((p: Player, i: number) => (
+                                  <span
+                                    key={i}
+                                    className="ap-player-chip wl"
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '5px',
+                                    }}
+                                  >
+                                    WL{i + 1}: {p.name}
+                                    <span
+                                      className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                    >
+                                      {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                    </span>
+                                  </span>
+                                ))}
+                            </div>
                           </div>
-                          <div className="ap-archive-actions">
-                            <button
-                              className="ap-action-btn success"
-                              onClick={() => handleArchive(slot)}
-                            >
-                              📤 Unarchive
-                            </button>
-                            <button
-                              className="ap-action-btn danger"
-                              onClick={() => handleDelete(slot)}
-                            >
-                              🗑 Delete
-                            </button>
+                        ))}
+                      </div>
+                    );
+                  })
+              )}
+
+              {/* Archived */}
+              {(() => {
+                const archived = Object.values(groupedSlots)
+                  .flat()
+                  .filter((s) => s.slotArchived)
+                  .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                if (archived.length === 0) return null;
+                return (
+                  <>
+                    <p className="ap-section-title">Archived Bookings</p>
+                    {archived.map((slot, ci) => {
+                      const isExpanded = expandedArchiveIds.has(slot._id);
+                      const slotTotal = [...slot.players, ...slot.waitList].reduce(
+                        (s, p) => s + (p.playerAmt ?? 0),
+                        0,
+                      );
+                      return (
+                        <div key={slot._id} className="ap-archive-card">
+                          <div
+                            className="ap-archive-summary"
+                            onClick={() => toggleArchiveExpand(slot._id)}
+                          >
+                            <div className="ap-archive-meta">
+                              <span className="ap-archive-date">{slot.date}</span>
+                              <span className="ap-archive-time">{slot.time}</span>
+                              <span className="ap-archive-court">
+                                Court {slot.courtNo > 0 ? slot.courtNo : ci + 1}
+                              </span>
+                            </div>
+                            <span className={`ap-archive-chevron${isExpanded ? ' open' : ''}`}>
+                              ▼
+                            </span>
                           </div>
+                          {isExpanded && (
+                            <div className="ap-archive-body">
+                              <div className="ap-group-amount-bar" style={{ marginTop: '4px' }}>
+                                <span className="ap-amount-label">Total Amount:</span>
+                                <span className="ap-amount-value">
+                                  {slotTotal > 0 ? `$${fmt(slotTotal)}` : '—'}
+                                </span>
+                              </div>
+                              <div className="ap-archive-players">
+                                {slot.players.map((p: Player, i: number) => (
+                                  <span
+                                    key={i}
+                                    className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '5px',
+                                    }}
+                                  >
+                                    {p.name || `P${i + 1} open`}
+                                    {p.name && (
+                                      <span
+                                        className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                      >
+                                        {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                      </span>
+                                    )}
+                                  </span>
+                                ))}
+                                {slot.waitList
+                                  .filter((p: Player) => p.name)
+                                  .map((p: Player, i: number) => (
+                                    <span
+                                      key={i}
+                                      className="ap-player-chip wl"
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                      }}
+                                    >
+                                      WL{i + 1}: {p.name}
+                                      <span
+                                        className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                      >
+                                        {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                      </span>
+                                    </span>
+                                  ))}
+                              </div>
+                              <div className="ap-archive-actions">
+                                <button
+                                  className="ap-action-btn success"
+                                  onClick={() => handleArchive(slot)}
+                                >
+                                  📤 Unarchive
+                                </button>
+                                <button
+                                  className="ap-action-btn danger"
+                                  onClick={() => handleDelete(slot)}
+                                >
+                                  🗑 Delete
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </>
-            );
-          })()}
+                      );
+                    })}
+                  </>
+                );
+              })()}
+            </>
+          )}
+
+          {/* ══════════════════════ REGISTERED USERS TAB ══════════════════════ */}
+          {activeTab === 'users' && (
+            <>
+              <p className="ap-section-title">Registered Users</p>
+
+              {usersLoading ? (
+                <div className="usr-loader">
+                  <div className="usr-spinner" />
+                  Loading users...
+                </div>
+              ) : users.length === 0 ? (
+                <p className="usr-empty">No registered users found.</p>
+              ) : (
+                <div className="usr-table-wrap">
+                  <table className="usr-table">
+                    <thead>
+                      <tr>
+                        <th style={{ width: 48 }}>SL NO</th>
+                        <th style={{ minWidth: 130 }}>
+                          <span className="usr-th-inner">
+                            NAME{' '}
+                            <SortArrow
+                              col="name"
+                              activeKey={userSortKey}
+                              dir={userSortDir}
+                              onSort={handleUserSort}
+                            />
+                          </span>
+                        </th>
+                        <th style={{ minWidth: 160 }}>
+                          <span className="usr-th-inner">
+                            CONTACT{' '}
+                            <SortArrow
+                              col="contact"
+                              activeKey={userSortKey}
+                              dir={userSortDir}
+                              onSort={handleUserSort}
+                            />
+                          </span>
+                        </th>
+                        <th style={{ minWidth: 180, maxWidth: 220 }}>COMMENTS</th>
+                        <th style={{ minWidth: 120 }}>
+                          <span className="usr-th-inner">
+                            LAST LOGIN{' '}
+                            <SortArrow
+                              col="lastLogin"
+                              activeKey={userSortKey}
+                              dir={userSortDir}
+                              onSort={handleUserSort}
+                            />
+                          </span>
+                        </th>
+                        <th style={{ width: 140 }} className="center">
+                          <span className="usr-th-inner" style={{ justifyContent: 'center' }}>
+                            APPROVAL STATUS{' '}
+                            <SortArrow
+                              col="profileApproved"
+                              activeKey={userSortKey}
+                              dir={userSortDir}
+                              onSort={handleUserSort}
+                            />
+                          </span>
+                        </th>
+                        <th style={{ width: 100 }} className="center">
+                          REMOVE USER
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sortedUsers().map((u, idx) => (
+                        <tr key={u._id}>
+                          <td>
+                            <span className="usr-sl">{idx + 1}</span>
+                          </td>
+                          <td>
+                            <span className="usr-name">{u.name}</span>
+                          </td>
+                          <td>
+                            <span className="usr-contact">{getContact(u)}</span>
+                          </td>
+                          <td
+                            className="usr-comment-cell"
+                            title={u.comments || 'Click to add a comment'}
+                            onClick={() => openCommentModal(u)}
+                          >
+                            {u.comments ? (
+                              <span className="usr-comment-preview">{u.comments}</span>
+                            ) : (
+                              <span className="usr-comment-empty">+ add</span>
+                            )}
+                          </td>
+                          <td>
+                            {u.lastLogin ? (
+                              <span className="usr-login">{formatLastLogin(u.lastLogin)}</span>
+                            ) : (
+                              <span className="usr-login-never">Never</span>
+                            )}
+                          </td>
+                          <td className="center">
+                            {u.profileApproved ? (
+                              <span className="usr-status-approved">✓ COMPLETED</span>
+                            ) : (
+                              <button
+                                className="usr-approve-btn"
+                                onClick={() => handleApproveUser(u)}
+                              >
+                                APPROVE
+                              </button>
+                            )}
+                          </td>
+                          <td className="center">
+                            {u.role === 'user' ? (
+                              <button
+                                className="usr-remove-btn"
+                                title="Delete user"
+                                onClick={() => handleDeleteUser(u)}
+                              >
+                                ❌
+                              </button>
+                            ) : (
+                              <span className="usr-remove-txt">ADMIN</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
     </>

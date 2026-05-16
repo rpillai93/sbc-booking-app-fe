@@ -8,6 +8,7 @@ import type {
   ResetByKeyResponse,
   RegisterResponse,
   UpdateAmountPayload,
+  GetUsersResponse,
 } from '../types';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000/api';
@@ -56,3 +57,15 @@ export const archiveSlot = (id: string, data: { isArchived: boolean }) =>
 
 export const updateCourtNo = (id: string, data: { courtNo: number }) =>
   axios.patch(`${BASE}/slots/${id}/courtno`, data, { headers: getHeaders() });
+
+export const getUsers = () =>
+  axios.get<GetUsersResponse>(`${BASE}/users`, { headers: getHeaders() });
+
+export const approveUser = (id: string) =>
+  axios.patch(`${BASE}/users/${id}/approve`, {}, { headers: getHeaders() });
+
+export const deleteUser = (id: string) =>
+  axios.delete(`${BASE}/users/${id}`, { headers: getHeaders() });
+
+export const addUserComments = (id: string, data: { comments: string }) =>
+  axios.patch(`${BASE}/users/${id}/comment`, data, { headers: getHeaders() });

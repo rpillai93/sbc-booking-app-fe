@@ -77,3 +77,18 @@ export interface ResetByKeyResponse {
   success: boolean;
   newResetKey: string;
 }
+
+export interface User {
+  _id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  lastLogin: string; // ISO string or ""
+  profileApproved: boolean;
+  comments?: string;
+  role: 'user' | 'admin';
+}
+
+export interface GetUsersResponse {
+  users: User[];
+}
