@@ -14,6 +14,7 @@ interface ModalState {
   message: string;
   onConfirm: (() => void) | null;
   onCancel: (() => void) | null;
+  hideCancel: boolean;
   confirmLabel: string;
   confirmColor: string;
 }
@@ -22,6 +23,7 @@ const CLOSED_MODAL: ModalState = {
   message: '',
   onConfirm: null,
   onCancel: null,
+  hideCancel: false,
   confirmLabel: 'Confirm',
   confirmColor: '#dc2626',
 };
@@ -31,8 +33,9 @@ function emptyPlayer(): Player {
   return {
     _id: '',
     name: '',
-    identifier: '',
-    bookedBy: '',
+    ownerIdentifier: '',
+    ownerName: '',
+    lastUpdatedIdentifier: '',
     timeStamp: '',
     payment: false,
     playerAmt: 0,
@@ -81,7 +84,6 @@ export default function IndexPage() {
   const [loading, setLoading] = useState(true);
   const [loaderMsg, setLoaderMsg] = useState('Loading bookings...');
   const [modal, setModal] = useState<ModalState>(CLOSED_MODAL);
-  const [okayMsg, setOkayMsg] = useState('');
   const [editingKey, setEditingKey] = useState<string | null>(null); // "slotId_playerIndex"
   const [editValue, setEditValue] = useState('');
 
@@ -96,7 +98,7 @@ export default function IndexPage() {
       const res = await getSlots();
       setGroupedSlots(res.data.groupedSlots);
     } catch {
-      setOkayMsg('Failed to load bookings. Please refresh.');
+      showOkayMsg('Failed to load bookings. Please refresh.');
     } finally {
       if (!quiet) setLoading(false);
     }
@@ -111,19 +113,41 @@ export default function IndexPage() {
     fetchSlots();
   }, [fetchSlots]);
 
+  // ── okay helper (wrapped by confirm helper)──────────────────────────────
+  function showOkayMsg(
+    message: string,
+    onConfirm?: () => void,
+    onCancel?: () => void,
+    hideCancel?: boolean,
+    confirmLabel = 'Okay',
+    confirmColor = '#dc2626',
+  ) {
+    setModal({
+      open: true,
+      message,
+      onConfirm: onConfirm ?? null,
+      onCancel: onCancel ?? null,
+      hideCancel: hideCancel ?? true,
+      confirmLabel,
+      confirmColor,
+    });
+  }
+
   // ── confirm modal helpers ─────────────────────────────────────────────────
   function confirm(
     message: string,
-    onConfirm: () => void,
+    onConfirm?: () => void,
     onCancel?: () => void,
+    hideCancel?: boolean,
     confirmLabel = 'Remove',
     confirmColor = '#dc2626',
   ) {
     setModal({
       open: true,
       message,
-      onConfirm,
+      onConfirm: onConfirm ?? null,
       onCancel: onCancel ?? null,
+      hideCancel: hideCancel ?? false,
       confirmLabel,
       confirmColor,
     });
@@ -141,7 +165,7 @@ export default function IndexPage() {
     } catch (err) {
       const msg =
         (err as AxiosError<{ message: string }>).response?.data?.message ?? 'Update failed';
-      setOkayMsg(msg);
+      showOkayMsg(msg);
       await fetchSlots(true);
     } finally {
       setLoading(false);
@@ -163,7 +187,7 @@ export default function IndexPage() {
     } catch (err) {
       const msg =
         (err as AxiosError<{ message: string }>).response?.data?.message ?? 'Payment update failed';
-      setOkayMsg(msg);
+      showOkayMsg(msg);
       await fetchSlots(true);
     } finally {
       setLoading(false);
@@ -205,6 +229,7 @@ export default function IndexPage() {
       } ${isDelete ? `slot?${suffix}` : 'confirm?'}`,
       () => doUpdatePlayer(slot._id, idx, trimmed, slot.updatedAt),
       undefined,
+      false,
       isDelete ? 'Remove' : 'Confirm',
       isDelete ? '#dc2626' : '#16a34a',
     );
@@ -277,7 +302,7 @@ export default function IndexPage() {
             ''
           ) : (
             <>
-              <span className="ip-col-ts-name">{p.bookedBy || ''}</span>
+              <span className="ip-col-ts-name">{p.ownerName || ''}</span>
               <span className="ip-col-ts-time">{formatTimestamp(p.timeStamp)}</span>
             </>
           )}
@@ -312,6 +337,7 @@ export default function IndexPage() {
                   () => {
                     e.target.checked = prev;
                   },
+                  false,
                   checked ? 'Confirm' : 'Remove',
                   checked ? '#16a34a' : '#dc2626',
                 );
@@ -591,7 +617,7 @@ export default function IndexPage() {
 
         .ip-col-label { font-size: 12px; color: #9ca3af; text-align: center; }
         .ip-col-name { }
-        .ip-col-bookedby { font-size: 10px; color: #9ca3af; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ip-col-ownerName { font-size: 10px; color: #9ca3af; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .ip-col-ts { display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; }
         .ip-col-ts-name { font-size: 11px; font-weight: 600; color: #d0d0d0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
         .ip-col-ts-time { font-size: 10px; color: #6b7280; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -739,24 +765,6 @@ export default function IndexPage() {
         </div>
       )}
 
-      {/* Okay modal */}
-      {okayMsg && (
-        <div className="ip-modal-backdrop">
-          <div className="ip-modal">
-            <div className="ip-modal-msg" dangerouslySetInnerHTML={{ __html: okayMsg }} />
-            <div className="ip-modal-btns">
-              <button
-                className="ip-modal-btn"
-                style={{ background: '#dc2626', color: '#fff' }}
-                onClick={() => setOkayMsg('')}
-              >
-                Okay
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Confirm modal */}
       {modal.open && (
         <div className="ip-modal-backdrop">
@@ -792,6 +800,8 @@ export default function IndexPage() {
         <div className="ip-topbar">
           <div className="ip-topbar-brand">🏸 SBC Badminton</div>
           <div className="ip-topbar-right">
+            <span className="ip-topbar-label">Balance payments:</span>
+            <span className="ip-topbar-email">{`$${user?.balancePayments}`}</span>
             <span className="ip-topbar-label">Logged in as:</span>
             <span className="ip-topbar-email">{user?.name}</span>
             {user?.role === 'admin' && (
@@ -890,7 +900,7 @@ export default function IndexPage() {
                             Court {slot.courtNo > 0 ? slot.courtNo : courtIdx + 1}
                           </div>
 
-                          {slot.slotLocked && (
+                          {slot.slotLocked && slot.slotAmountPublished && (
                             <>
                               <div className="ip-locked-msg">
                                 ⚠ Bookings are locked. Speak to an admin to make changes.
@@ -914,7 +924,7 @@ export default function IndexPage() {
                           <div className="ip-grid-header">
                             <div>PLAYER</div>
                             <div>NAME</div>
-                            <div>LAST UPDATED BY</div>
+                            <div>OWNER / LAST UPDATE</div>
                             <div>PAYMENT</div>
                             <div>REMOVE</div>
                           </div>

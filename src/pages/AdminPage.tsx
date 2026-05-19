@@ -27,6 +27,7 @@ interface ModalState {
   message: string;
   onConfirm: (() => void) | null;
   onCancel: (() => void) | null;
+  hideCancel: boolean;
   confirmLabel: string;
   confirmColor: string;
 }
@@ -35,6 +36,7 @@ const CLOSED: ModalState = {
   message: '',
   onConfirm: null,
   onCancel: null,
+  hideCancel: false,
   confirmLabel: 'Confirm',
   confirmColor: '#dc2626',
 };
@@ -143,7 +145,6 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [loaderMsg, setLoaderMsg] = useState('Loading...');
   const [modal, setModal] = useState<ModalState>(CLOSED);
-  const [okayMsg, setOkayMsg] = useState('');
 
   const [createDate, setCreateDate] = useState('');
   const [createFrom, setCreateFrom] = useState('6:00 PM');
@@ -176,7 +177,7 @@ export default function AdminPage() {
       const res = await getSlots();
       setGroupedSlots(res.data.groupedSlots);
     } catch {
-      setOkayMsg('Failed to load slots. Please refresh.');
+      showOkayMsg('Failed to load slots. Please refresh.');
     } finally {
       setLoading(false);
     }
@@ -189,7 +190,7 @@ export default function AdminPage() {
       const res = await getUsers();
       setUsers(res.data.users);
     } catch {
-      setOkayMsg('Failed to load users. Please refresh.');
+      showOkayMsg('Failed to load users. Please refresh.');
     } finally {
       setUsersLoading(false);
     }
@@ -212,19 +213,41 @@ export default function AdminPage() {
     fetchUsers();
   }, [activeTab, fetchUsers]);
 
+  // ── okay helper (wrapped by confirm helper)──────────────────────────────
+  function showOkayMsg(
+    message: string,
+    onConfirm?: () => void,
+    onCancel?: () => void,
+    hideCancel?: boolean,
+    confirmLabel = 'Okay',
+    confirmColor = '#dc2626',
+  ) {
+    setModal({
+      open: true,
+      message,
+      onConfirm: onConfirm ?? null,
+      onCancel: onCancel ?? null,
+      hideCancel: hideCancel ?? true,
+      confirmLabel,
+      confirmColor,
+    });
+  }
+
   // ── confirm helper ────────────────────────────────────────────────────────
   function confirm(
     message: string,
-    onConfirm: () => void,
+    onConfirm?: () => void,
     onCancel?: () => void,
+    hideCancel?: boolean,
     confirmLabel = 'Confirm',
     confirmColor = '#dc2626',
   ) {
     setModal({
       open: true,
       message,
-      onConfirm,
+      onConfirm: onConfirm ?? null,
       onCancel: onCancel ?? null,
+      hideCancel: hideCancel ?? false,
       confirmLabel,
       confirmColor,
     });
@@ -238,7 +261,7 @@ export default function AdminPage() {
       await fetchSlots(true);
     } catch (err) {
       const e = err as AxiosError<{ message: string }>;
-      setOkayMsg(e.response?.data?.message ?? 'An error occurred');
+      showOkayMsg(e.response?.data?.message ?? 'An error occurred');
       await fetchSlots(true);
     } finally {
       setLoading(false);
@@ -258,29 +281,39 @@ export default function AdminPage() {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!createDate) {
-      setOkayMsg('Please select a date.');
+      showOkayMsg('Please select a date.');
       return;
     }
     if (parseTime(createFrom) >= parseTime(createTo)) {
-      setOkayMsg('The <b>From</b> time must be before the <b>To</b> time.');
+      showOkayMsg('The <b>From</b> time must be before the <b>To</b> time.');
       return;
     }
-    setCreating(true);
-    try {
-      await createSlot({
-        date: createDate,
-        time: `${createFrom}–${createTo}`,
-        courts: createCourts,
-      });
-      await fetchSlots(true);
-      setCreateDate('');
-      setCreateCourts(1);
-    } catch (err) {
-      const e = err as AxiosError<{ message: string }>;
-      setOkayMsg(e.response?.data?.message ?? 'Failed to create slot');
-    } finally {
-      setCreating(false);
-    }
+    confirm(
+      `Create booking for <b>${createCourts}</b> court(s) on <b>${createDate}</b> from <b>${createFrom}</b> to <b>${createTo}</b>?`,
+      async () => {
+        setCreating(true);
+        try {
+          await createSlot({
+            date: createDate,
+            time: `${createFrom}–${createTo}`,
+            courts: createCourts,
+          });
+          await fetchSlots(true);
+          setCreateDate('');
+          setCreateCourts(1);
+          confirm(`Booking created successfully!`, undefined, undefined, true, 'Okay', '#22c55e');
+        } catch (err) {
+          const e = err as AxiosError<{ message: string }>;
+          showOkayMsg(e.response?.data?.message ?? 'Failed to create slot');
+        } finally {
+          setCreating(false);
+        }
+      },
+      undefined,
+      false,
+      'Create Booking',
+      '#22c55e',
+    );
   }
 
   // ── slot actions ──────────────────────────────────────────────────────────
@@ -289,6 +322,7 @@ export default function AdminPage() {
       `Delete court on <b>${slot.date}, ${slot.time}</b>? This cannot be undone.`,
       () => withLoader('Deleting...', () => deleteSlot(slot._id).then()),
       undefined,
+      false,
       'Delete',
       '#dc2626',
     );
@@ -303,6 +337,7 @@ export default function AdminPage() {
           lockSlot(slot._id, { isLocked: next }).then(),
         ),
       undefined,
+      false,
       next ? 'Lock' : 'Unlock',
       next ? '#f59e0b' : '#22c55e',
     );
@@ -317,6 +352,7 @@ export default function AdminPage() {
           hideSlot(slot._id, { isHidden: next }).then(),
         ),
       undefined,
+      false,
       next ? 'Hide' : 'Show',
       next ? '#6b7280' : '#22c55e',
     );
@@ -333,6 +369,7 @@ export default function AdminPage() {
           archiveSlot(slot._id, { isArchived: next }).then(),
         ),
       undefined,
+      false,
       next ? 'Archive' : 'Unarchive',
       next ? '#6b7280' : '#22c55e',
     );
@@ -480,6 +517,23 @@ export default function AdminPage() {
     });
   }
 
+  function handleSaveApplyModal(applyPlayerCount: number, runningTotal: number) {
+    confirm(
+      `Confirm <b>$${fmt(runningTotal)}</b> (including birdies + tax) as the total for <b>${applyPlayerCount}</b> players for this session?`,
+      async () => {
+        try {
+          await saveApplyModal();
+        } catch {
+          showOkayMsg('Failed to apply the amount. Please try again.');
+        }
+      },
+      undefined,
+      false,
+      'Confirm Amount',
+      '#22c55e',
+    );
+  }
+
   async function saveApplyModal() {
     const { rows, groupKey } = applyModal;
     const bySlot = new Map<
@@ -522,7 +576,7 @@ export default function AdminPage() {
   function handleCourtNoSave(slot: Slot, newValue: string) {
     const num = parseInt(newValue, 10);
     if (isNaN(num) || num < 1 || num > 9) {
-      setOkayMsg('Court number must be between <b>1</b> and <b>9</b>.');
+      showOkayMsg('Court number must be between <b>1</b> and <b>9</b>.');
       setEditingCourtId(null);
       return;
     }
@@ -531,6 +585,7 @@ export default function AdminPage() {
       `Save Court no. to <b>${num}</b>?`,
       () => withLoader('Saving...', () => updateCourtNo(slot._id, { courtNo: num }).then()),
       undefined,
+      false,
       'Save',
       '#22c55e',
     );
@@ -547,10 +602,11 @@ export default function AdminPage() {
             prev.map((user) => (user._id === u._id ? { ...user, profileApproved: true } : user)),
           );
         } catch {
-          setOkayMsg('Failed to approve user. Please try again.');
+          showOkayMsg('Failed to approve user. Please try again.');
         }
       },
       undefined,
+      false,
       'Approve',
       '#22c55e',
     );
@@ -564,10 +620,11 @@ export default function AdminPage() {
           await deleteUser(u._id);
           setUsers((prev) => prev.filter((x) => x._id !== u._id));
         } catch {
-          setOkayMsg('Failed to delete user. Please try again.');
+          showOkayMsg('Failed to delete user. Please try again.');
         }
       },
       undefined,
+      false,
       'Remove',
       '#dc2626',
     );
@@ -648,7 +705,7 @@ export default function AdminPage() {
       );
       closeCommentModal();
     } catch {
-      setOkayMsg('Failed to save comment. Please try again.');
+      showOkayMsg('Failed to save comment. Please try again.');
     } finally {
       setCommentSaving(false);
     }
@@ -1135,24 +1192,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Okay modal */}
-      {okayMsg && (
-        <div className="ap-modal-backdrop">
-          <div className="ap-modal">
-            <div className="ap-modal-msg" dangerouslySetInnerHTML={{ __html: okayMsg }} />
-            <div className="ap-modal-btns">
-              <button
-                className="ap-modal-btn"
-                style={{ background: '#dc2626', color: '#fff' }}
-                onClick={() => setOkayMsg('')}
-              >
-                Okay
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Confirm modal */}
       {modal.open && (
         <div className="ap-modal-backdrop">
@@ -1169,15 +1208,17 @@ export default function AdminPage() {
               >
                 {modal.confirmLabel}
               </button>
-              <button
-                className="ap-modal-btn ap-modal-cancel"
-                onClick={() => {
-                  setModal(CLOSED);
-                  modal.onCancel?.();
-                }}
-              >
-                Cancel
-              </button>
+              {!modal.hideCancel && (
+                <button
+                  className="ap-modal-btn ap-modal-cancel"
+                  onClick={() => {
+                    setModal(CLOSED);
+                    modal.onCancel?.();
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -1461,7 +1502,7 @@ export default function AdminPage() {
                 <div className="ap-apply-footer">
                   <button
                     className="ap-apply-save"
-                    onClick={saveApplyModal}
+                    onClick={() => handleSaveApplyModal(applyPlayerCount, runningTotal)}
                     disabled={applySaveDisabled}
                   >
                     Save
@@ -1523,6 +1564,8 @@ export default function AdminPage() {
             🏸 SBC Admin <span className="ap-badge">ADMIN</span>
           </div>
           <div className="ap-topbar-right">
+            <span className="ap-email-label">Balance payments:</span>
+            <span className="ap-email">{`$${user?.balancePayments}`}</span>
             <span className="ap-email-label">Logged in as:</span>
             <span className="ap-email">{user?.name}</span>
             <button className="ap-player-btn" onClick={() => navigate('/')}>

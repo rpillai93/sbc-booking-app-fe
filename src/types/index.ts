@@ -1,8 +1,9 @@
 export interface Player {
   _id: string;
   name: string;
-  identifier: string;
-  bookedBy: string;
+  ownerIdentifier: string;
+  ownerName: string;
+  lastUpdatedIdentifier: string;
   timeStamp: string;
   payment: boolean;
   playerAmt: number;
@@ -16,6 +17,7 @@ export interface Slot {
   slotLocked: boolean;
   slotHidden: boolean;
   slotArchived: boolean;
+  slotAmountPublished: boolean;
   players: Player[];
   waitList: Player[];
   createdAt: string;
@@ -41,6 +43,7 @@ export interface AuthUser {
   identifier: string;
   email: string | undefined;
   phone: string | undefined;
+  balancePayments: number;
   role: 'user' | 'admin';
 }
 
@@ -86,6 +89,7 @@ export interface User {
   lastLogin: string; // ISO string or ""
   profileApproved: boolean;
   comments?: string;
+  balancePayments: number;
   role: 'user' | 'admin';
 }
 
