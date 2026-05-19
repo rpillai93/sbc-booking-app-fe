@@ -288,7 +288,7 @@ export default function IndexPage() {
           <div className="ip-pay-stack">
             {/* amount — only show when a real amount exists */}
             <span className="ip-player-amt">
-              {!blank && p.playerAmt > 0
+              {!blank && p.playerAmt > 0 && slot.slotLocked
                 ? `$${p.playerAmt % 1 === 0 ? p.playerAmt : p.playerAmt.toFixed(2)}`
                 : ''}
             </span>

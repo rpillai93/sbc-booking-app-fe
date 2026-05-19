@@ -17,6 +17,7 @@ import {
 } from '../api/api';
 import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
+import React from 'react';
 
 type AdminTab = 'slots' | 'users';
 
@@ -45,18 +46,21 @@ interface PlayerAmtRow {
   name: string;
   isWaitList: boolean;
   amount: string;
+  split: 100 | 75 | 50 | 25 | 0;
 }
 interface ApplyModalState {
   open: boolean;
   groupKey: string;
   rows: PlayerAmtRow[];
   includeWaitlist: boolean;
+  originalTotal: number;
 }
 const APPLY_CLOSED: ApplyModalState = {
   open: false,
   groupKey: '',
   rows: [],
   includeWaitlist: false,
+  originalTotal: 0,
 };
 
 // ─── users sort ───────────────────────────────────────────────────────────────
@@ -72,7 +76,12 @@ function computeGroupTotal(slots: Slot[]): number {
 }
 
 function fmt(n: number): string {
-  return n % 1 === 0 ? String(n) : n.toFixed(2);
+  if (n % 1 === 0) {
+    return String(n);
+  } else {
+    const num = Math.round(n * 100) / 100;
+    return num.toString();
+  }
 }
 
 function parseTime(t: string): number {
@@ -343,6 +352,7 @@ export default function AdminPage() {
             name: p.name,
             isWaitList: false,
             amount: '',
+            split: 100,
           });
       }
       for (const p of slot.waitList) {
@@ -353,47 +363,102 @@ export default function AdminPage() {
             name: p.name,
             isWaitList: true,
             amount: '0',
+            split: 100,
           });
       }
     }
-    const split = mainPlayers.length > 0 ? (totalInput / mainPlayers.length).toFixed(2) : '0.00';
+    const split =
+      mainPlayers.length > 0
+        ? (Math.round((totalInput / mainPlayers.length) * 100) / 100).toString()
+        : '0';
     const rows: PlayerAmtRow[] = [
       ...mainPlayers.map((r) => ({ ...r, amount: split })),
       ...wlPlayers,
     ];
-    setApplyModal({ open: true, groupKey, rows, includeWaitlist: false });
+    setApplyModal({
+      open: true,
+      groupKey,
+      rows,
+      includeWaitlist: false,
+      originalTotal: totalInput,
+    });
     setEditAmtKey(null);
   }
 
   function updateApplyRow(idx: number, value: string) {
     setApplyModal((prev) => {
-      const rows = [...prev.rows];
-      rows[idx] = { ...rows[idx], amount: value };
-      return { ...prev, rows };
+      const enteredAmt = parseFloat(value);
+
+      // build new rows with the edited cell updated
+      const rows = prev.rows.map((r, i) => (i === idx ? { ...r, amount: value } : { ...r }));
+
+      // if the entered value is invalid or exceeds the total, just store it
+      // (the save button will be disabled by the validation below)
+      if (isNaN(enteredAmt) || enteredAmt < 0 || enteredAmt > prev.originalTotal) {
+        return { ...prev, rows };
+      }
+
+      const remaining = prev.originalTotal - enteredAmt;
+
+      // distribute remaining among all other eligible rows based on their split weight
+      const otherRows = rows.filter((r, i) => {
+        if (i === idx) return false;
+        if (r.isWaitList && !prev.includeWaitlist) return false;
+        return true;
+      });
+
+      const totalWeight = otherRows.reduce((sum, r) => sum + r.split / 100, 0);
+
+      const updatedRows = rows.map((r, i) => {
+        if (i === idx) return r; // keep the manually edited value
+        if (r.isWaitList && !prev.includeWaitlist) return { ...r, amount: '0' };
+        if (totalWeight === 0) return { ...r, amount: '0' };
+        const share = (remaining / totalWeight) * (r.split / 100);
+        return { ...r, amount: (Math.round(share * 100) / 100).toString() };
+      });
+
+      return { ...prev, rows: updatedRows };
+    });
+  }
+
+  function handleSplitChange(idx: number, value: 100 | 75 | 50 | 25 | 0) {
+    setApplyModal((prev) => {
+      const rows = prev.rows.map((r, i) => (i === idx ? { ...r, split: value } : { ...r }));
+
+      const totalWeight = rows.reduce((sum, r) => {
+        if (r.isWaitList && !prev.includeWaitlist) return sum;
+        return sum + r.split / 100;
+      }, 0);
+
+      return {
+        ...prev,
+        rows: rows.map((r) => {
+          if (r.isWaitList && !prev.includeWaitlist) return { ...r, amount: '0' };
+          if (totalWeight === 0) return { ...r, amount: '0' };
+          const exact = (prev.originalTotal / totalWeight) * (r.split / 100);
+          return { ...r, amount: (Math.round(exact * 100) / 100).toString() };
+        }),
+      };
     });
   }
 
   function toggleIncludeWaitlist(checked: boolean) {
     setApplyModal((prev) => {
-      // figure out the current total across all active (non-disabled) rows
-      const currentTotal = prev.rows.reduce((sum, r) => {
-        if (r.isWaitList && !prev.includeWaitlist) return sum; // was disabled, not counted
-        return sum + (parseFloat(r.amount) || 0);
-      }, 0);
-
-      const newRows = prev.rows.map((r) => ({ ...r }));
       const eligibleCount = checked
-        ? newRows.length // everyone
-        : newRows.filter((r) => !r.isWaitList).length; // main players only
+        ? prev.rows.length
+        : prev.rows.filter((r) => !r.isWaitList).length;
 
-      const split = eligibleCount > 0 ? (currentTotal / eligibleCount).toFixed(2) : '0.00';
+      const split =
+        eligibleCount > 0
+          ? (Math.round((prev.originalTotal / eligibleCount) * 100) / 100).toString()
+          : '0';
 
       return {
         ...prev,
         includeWaitlist: checked,
-        rows: newRows.map((r) => {
-          if (r.isWaitList && !checked) return { ...r, amount: '0' }; // excluded → zero
-          return { ...r, amount: split }; // all others → equal split
+        rows: prev.rows.map((r) => {
+          if (r.isWaitList && !checked) return { ...r, amount: '0', split: 100 };
+          return { ...r, amount: split, split: 100 };
         }),
       };
     });
@@ -401,15 +466,17 @@ export default function AdminPage() {
 
   function redistributeFromTotal(newTotal: number) {
     setApplyModal((prev) => {
-      const activRows = prev.rows.filter((r) => !r.isWaitList || prev.includeWaitlist);
-      const count = activRows.length;
-      if (count === 0) return prev;
-      const split = (newTotal / count).toFixed(2);
-      const rows = prev.rows.map((r) => {
-        if (r.isWaitList && !prev.includeWaitlist) return r;
-        return { ...r, amount: split };
-      });
-      return { ...prev, rows };
+      const eligible = prev.rows.filter((r) => !r.isWaitList || prev.includeWaitlist);
+      if (eligible.length === 0) return prev;
+      const split = (Math.round((newTotal / eligible.length) * 100) / 100).toString();
+      return {
+        ...prev,
+        originalTotal: newTotal, // ← update the anchor when admin explicitly sets a new total
+        rows: prev.rows.map((r) => {
+          if (r.isWaitList && !prev.includeWaitlist) return r;
+          return { ...r, amount: split, split: 100 };
+        }),
+      };
     });
   }
 
@@ -438,6 +505,7 @@ export default function AdminPage() {
     setApplyModal(APPLY_CLOSED);
     setEditingTotal(false);
     setTotalInputValue('');
+
     await withLoader('Saving amounts...', async () => {
       await Promise.all(
         Array.from(bySlot.entries()).map(([slotId, data]) =>
@@ -666,7 +734,6 @@ export default function AdminPage() {
 
         .ap-create-card { background: #161616; border: 1px solid #2a2a2a; border-radius: 16px; padding: 20px; }
         .ap-form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr auto auto; gap: 10px; align-items: end; }
-        @media (max-width: 680px) { .ap-form-grid { grid-template-columns: 1fr 1fr; } }
         .ap-form-field label { display: block; font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
         .ap-input { width: 100%; padding: 10px 12px; background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 8px; color: #f0f0f0; font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; transition: border-color 0.2s; margin-top: 0; }
         .ap-input:focus { border-color: #22c55e; }
@@ -722,22 +789,33 @@ export default function AdminPage() {
         .ap-paid-coin.unpaid { color: #ef4444; background: #ef444418; border: 1.5px solid #ef4444; }
 
         .ap-apply-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 9997; padding: 16px; }
-        .ap-apply-modal { background: #161616; border: 1px solid #2a2a2a; border-radius: 16px; padding: 20px; width: 100%; max-width: 480px; box-shadow: 0 30px 80px rgba(0,0,0,0.7); display: flex; flex-direction: column; gap: 16px; max-height: 90vh; }
+        .ap-apply-modal { background: #161616; border: 1px solid #2a2a2a; border-radius: 16px; padding: 16px 12px; width: 100%; max-width: 480px; box-shadow: 0 30px 80px rgba(0,0,0,0.7); display: flex; flex-direction: column; gap: 12px; max-height: 90vh; overflow-y: auto; }
         .ap-apply-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 800; color: #f0f0f0; }
         .ap-apply-subtitle { font-family: 'Syne', sans-serif; font-size: 12px; font-weight: 800; color: #22c55e; }
         .ap-apply-subtitle-info { font-size: 12px; color: #555; margin-top: 2px; }
-        .ap-apply-list { overflow-y: auto; max-height: 340px; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+        .ap-apply-list { overflow-y: auto; max-height: 380px; row-gap: 4px; column-gap: 4px; scrollbar-gutter: stable; padding 0 8px; }
         .ap-apply-list::-webkit-scrollbar { width: 4px; }
         .ap-apply-list::-webkit-scrollbar-track { background: #111; border-radius: 4px; }
         .ap-apply-list::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
-        .ap-apply-row { display: grid; grid-template-columns: 28px 1fr 120px; align-items: center; gap: 10px; padding: 8px 10px; background: #1a1a1a; border: 1px solid #222; border-radius: 8px; }
+        .ap-apply-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) repeat(5, 28px) 72px; align-items: center; gap: 4px; padding: 8px 8px; background: #1a1a1a; border: 1px solid #222; border-radius: 8px; }
         .ap-apply-row.wl-disabled { opacity: 0.45; }
         .ap-apply-serial { font-size: 11px; font-weight: 700; color: #444; text-align: center; font-family: 'Syne', sans-serif; }
-        .ap-apply-name { font-size: 13px; color: #d0d0d0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ap-apply-name-main { font-size: 13px; color: #d0d0d0; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .ap-apply-sublabel { font-size: 10px; color: #555; margin-top: 1px; }
+        .ap-apply-list-header { display: grid; grid-template-columns: 22px minmax(0, 1fr) repeat(5, 28px) 72px; gap: 4px; padding: 0 8px 6px; border-bottom: 1px solid #222; margin-bottom: 2px; }
+        .ap-apply-list-header-cell { font-family: 'Syne', sans-serif; font-size: 9px; font-weight: 700; color: #444; text-transform: uppercase; letter-spacing: 0.3px; text-align: center; }
+        .ap-apply-list-header-cell.left { text-align: left; }
+
+        /* split sub-header group label */
+        .ap-apply-split-group { grid-column: span 5; text-align: center; font-family: 'Syne', sans-serif; font-size: 9px; font-weight: 700; color: #333; text-transform: uppercase; letter-spacing: 0.8px; padding-bottom: 4px; border-bottom: 1px solid #222; margin-bottom: 2px; }
+
+        /* radio button styling */
+        .ap-split-radio { display: flex; align-items: center; justify-content: center; }
+        .ap-split-radio input[type="radio"] { width: 13px; height: 13px; accent-color: #22c55e; cursor: pointer; margin: 0; }
+        .ap-split-radio input[type="radio"]:disabled { opacity: 0.25; cursor: not-allowed; }
         .ap-apply-amt-wrap { display: flex; align-items: center; gap: 4px; }
         .ap-apply-amt-symbol { font-size: 12px; color: #555; }
-        .ap-apply-amt-input { flex: 1; min-width: 0; width: 0; padding: 6px 8px; background: #111; border: 1px solid #2e2e2e; border-radius: 6px; color: #f0f0f0; font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; transition: border-color 0.2s; margin: 0; }
+        .ap-apply-amt-input { flex: 1; min-width: 0; width: 0; padding: 6px 4px; background: #111; border: 1px solid #2e2e2e; border-radius: 6px; color: #f0f0f0; font-family: 'DM Sans', sans-serif; font-size: 12px; outline: none; transition: border-color 0.2s; margin: 0; }
         .ap-apply-amt-input:focus { border-color: #22c55e; }
         .ap-apply-amt-input:disabled { opacity: 0.4; cursor: not-allowed; }
         .ap-wl-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #1a1a1a; border: 1px solid #222; border-radius: 8px; cursor: pointer; user-select: none; }
@@ -748,6 +826,7 @@ export default function AdminPage() {
         .ap-apply-total-value { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; color: #22c55e; }
         .ap-apply-footer { display: flex; gap: 10px; }
         .ap-apply-save { flex: 1; padding: 10px; background: #22c55e; color: #000; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0; transition: opacity 0.15s; }
+        .ap-apply-save:disabled {background: #555}
         .ap-apply-save:hover { opacity: 0.85; }
         .ap-apply-cancel { flex: 1; padding: 10px; background: #2a2a2a; color: #aaa; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0; }
 
@@ -776,6 +855,29 @@ export default function AdminPage() {
         .ap-modal-btn { flex: 1; padding: 10px; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; transition: opacity 0.15s; width: auto; margin: 0; }
         .ap-modal-btn:hover { opacity: 0.85; }
         .ap-modal-cancel { background: #2a2a2a; color: #aaa; }
+        @media (max-width: 680px) {
+          .ap-form-grid { grid-template-columns: 1fr 1fr; }
+          .ap-form-grid .ap-form-field:nth-child(4) { grid-column: 1; }
+          .ap-form-grid .ap-form-field:nth-child(5) { grid-column: 2; align-self: end; }
+          .ap-create-btn { width: 100%; }
+          .ap-topbar { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
+          .ap-topbar-right { gap: 8px; flex-wrap: wrap; }
+          .ap-email-label { display: none; }
+          .ap-container { padding: 16px 12px 60px; }
+        }
+        @media (max-width: 520px) {
+        .ap-apply-list { grid-template-columns: 18px minmax(0, 1fr) repeat(5, 24px) 62px !important; gap: 3px; padding: 0 6px; }
+        .ap-apply-unified-header { grid-template-columns: 18px minmax(0, 1fr) repeat(5, 24px) 62px; gap: 3px; padding: 0 6px;}
+        .ap-apply-row,
+        .ap-apply-list-header { grid-template-columns: 18px minmax(0, 1fr) repeat(5, 24px) 62px; gap: 3px; padding: 7px 6px; }
+        .ap-apply-list-header-cell { font-size: 8px; letter-spacing: 0; }
+        .ap-apply-serial { font-size: 10px; }
+        .ap-apply-name-main { font-size: 11px; }
+        .ap-apply-sublabel { font-size: 9px; }
+        .ap-apply-amt-symbol { display: none; }
+        .ap-apply-amt-input { font-size: 11px; padding: 5px 3px; }
+        .ap-split-radio input[type="radio"] { width: 12px; height: 12px; }
+        }
 
         /* ── users table ── */
         .usr-table-wrap {
@@ -1085,13 +1187,21 @@ export default function AdminPage() {
       {applyModal.open &&
         (() => {
           const runningTotal = applyModal.rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-          const playerCount = applyModal.rows.filter((p) => !p.isWaitList).length;
+          const applyPlayerCount = applyModal.includeWaitlist
+            ? applyModal.rows.length
+            : applyModal.rows.filter((p) => !p.isWaitList).length;
+
+          const anyRowExceedsTotal = applyModal.rows.some(
+            (r) => parseFloat(r.amount) > applyModal.originalTotal,
+          );
+          const applySaveDisabled = anyRowExceedsTotal;
+
           return (
             <div className="ap-apply-backdrop">
               <div className="ap-apply-modal">
                 <div>
                   <div className="ap-apply-title">Apply Player Amounts:</div>
-                  <div className="ap-apply-subtitle">{`(${applyModal.includeWaitlist ? applyModal.rows.length : playerCount} Players total)`}</div>
+                  <div className="ap-apply-subtitle">{`(${applyPlayerCount} Players total)`}</div>
                   <div className="ap-apply-subtitle-info">
                     Amounts split equally across main players. Adjust individually if needed.
                   </div>
@@ -1143,20 +1253,173 @@ export default function AdminPage() {
                     </span>
                   )}
                 </div>
-                <div className="ap-apply-list">
+                {/* Single grid wrapper — header + rows share identical column tracks */}
+                <div
+                  className="ap-apply-list"
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '22px minmax(0,1fr) repeat(5, 28px) 72px',
+                    gap: '4px',
+                    alignItems: 'center',
+                  }}
+                >
+                  {/* Header row 1 — sticky */}
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: 0, background: '#161616', zIndex: 2 }}
+                  >
+                    NO.
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell left"
+                    style={{ position: 'sticky', top: 0, background: '#161616', zIndex: 2 }}
+                  >
+                    NAME
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{
+                      gridColumn: 'span 5',
+                      borderBottom: '1px solid #333',
+                      paddingBottom: '2px',
+                      position: 'sticky',
+                      top: 0,
+                      background: '#161616',
+                      zIndex: 2,
+                    }}
+                  >
+                    SPLIT
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: 0, background: '#161616', zIndex: 2 }}
+                  >
+                    AMOUNT
+                  </div>
+
+                  {/* Header row 2 — percentage labels */}
+                  <div
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  />
+                  <div
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  />
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  >
+                    100%
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  >
+                    75%
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  >
+                    50%
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  >
+                    25%
+                  </div>
+                  <div
+                    className="ap-apply-list-header-cell"
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  >
+                    0%
+                  </div>
+                  <div
+                    style={{ position: 'sticky', top: '18px', background: '#161616', zIndex: 2 }}
+                  />
+
+                  {/* Divider spanning all 8 columns */}
+                  <div
+                    style={{
+                      gridColumn: '1 / -1',
+                      borderBottom: '1px solid #222',
+                      margin: '2px 0 4px',
+                    }}
+                  />
+
+                  {/* Data rows — each cell is a direct grid child, not a sub-grid */}
                   {applyModal.rows.map((row, idx) => {
                     const isWlDisabled = row.isWaitList && !applyModal.includeWaitlist;
+                    const splitOptions = [100, 75, 50, 25, 0] as const;
+                    const rowOpacity = isWlDisabled ? 0.45 : 1;
                     return (
-                      <div
-                        key={`${row.slotId}-${row.playerId}`}
-                        className={`ap-apply-row${isWlDisabled ? ' wl-disabled' : ''}`}
-                      >
-                        <span className="ap-apply-serial">{idx + 1}</span>
-                        <div>
-                          <div className="ap-apply-name">{row.name}</div>
+                      <React.Fragment key={`${row.slotId}-${row.playerId}`}>
+                        {/* NO. */}
+                        <span
+                          className="ap-apply-serial"
+                          style={{
+                            opacity: rowOpacity,
+                            background: '#1a1a1a',
+                            padding: '8px 0 8px 8px',
+                            borderRadius: idx === 0 ? '8px 0 0 8px' : '0',
+                            alignSelf: 'stretch',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          {idx + 1}
+                        </span>
+
+                        {/* NAME */}
+                        <div
+                          style={{
+                            opacity: rowOpacity,
+                            background: '#1a1a1a',
+                            padding: '8px 4px',
+                            alignSelf: 'stretch',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <div className="ap-apply-name-main">{row.name}</div>
                           {row.isWaitList && <div className="ap-apply-sublabel">Waitlist</div>}
                         </div>
-                        <div className="ap-apply-amt-wrap">
+
+                        {/* SPLIT radios */}
+                        {splitOptions.map((pct) => (
+                          <div
+                            key={pct}
+                            className="ap-split-radio"
+                            style={{
+                              opacity: rowOpacity,
+                              background: '#1a1a1a',
+                              alignSelf: 'stretch',
+                            }}
+                          >
+                            <input
+                              type="radio"
+                              name={`split-${row.slotId}-${row.playerId}`}
+                              checked={row.split === pct}
+                              disabled={isWlDisabled}
+                              onChange={() => handleSplitChange(idx, pct)}
+                            />
+                          </div>
+                        ))}
+
+                        {/* AMOUNT */}
+                        <div
+                          className="ap-apply-amt-wrap"
+                          style={{
+                            opacity: rowOpacity,
+                            background: '#1a1a1a',
+                            padding: '8px 8px 8px 4px',
+                            alignSelf: 'stretch',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                        >
                           <span className="ap-apply-amt-symbol">$</span>
                           <input
                             className="ap-apply-amt-input"
@@ -1168,21 +1431,9 @@ export default function AdminPage() {
                             onChange={(e) => updateApplyRow(idx, e.target.value)}
                           />
                         </div>
-                      </div>
+                      </React.Fragment>
                     );
                   })}
-                  {applyModal.rows.length === 0 && (
-                    <div
-                      style={{
-                        color: '#444',
-                        fontSize: '13px',
-                        textAlign: 'center',
-                        padding: '20px 0',
-                      }}
-                    >
-                      No players in this session yet.
-                    </div>
-                  )}
                 </div>
                 <label className="ap-wl-toggle">
                   <input
@@ -1194,9 +1445,25 @@ export default function AdminPage() {
                     Include waitlisted players in this payment
                   </span>
                 </label>
-
+                {anyRowExceedsTotal && (
+                  <div
+                    style={{
+                      fontSize: '12px',
+                      color: '#ef4444',
+                      textAlign: 'center',
+                      padding: '4px 0',
+                      fontWeight: 500,
+                    }}
+                  >
+                    Individual player amount cannot be greater than total amount.
+                  </div>
+                )}
                 <div className="ap-apply-footer">
-                  <button className="ap-apply-save" onClick={saveApplyModal}>
+                  <button
+                    className="ap-apply-save"
+                    onClick={saveApplyModal}
+                    disabled={applySaveDisabled}
+                  >
                     Save
                   </button>
                   <button
@@ -1519,24 +1786,40 @@ export default function AdminPage() {
                               </div>
                               <div className="ap-slot-actions">
                                 <button
+                                  title={
+                                    slot.slotLocked
+                                      ? 'Unlock this slot so others can edit their names.'
+                                      : 'Lock this slot so others cannot add or edit any names.'
+                                  }
                                   className={`ap-action-btn ${slot.slotLocked ? 'success' : 'warn'}`}
                                   onClick={() => handleLock(slot)}
                                 >
                                   {slot.slotLocked ? '🔓 Unlock' : '🔒 Lock'}
                                 </button>
                                 <button
+                                  title={
+                                    slot.slotHidden
+                                      ? 'Show this slot so others can see it in the Player View Page.'
+                                      : 'Hide this slot from the Player View Page.'
+                                  }
                                   className={`ap-action-btn ${slot.slotHidden ? 'success' : ''}`}
                                   onClick={() => handleHide(slot)}
                                 >
                                   {slot.slotHidden ? '👁 Show' : '🙈 Hide'}
                                 </button>
                                 <button
+                                  title={
+                                    'Archive this slot so it is moved to a different "Archived Bookings" section. You can unarchive anytime.'
+                                  }
                                   className="ap-action-btn"
                                   onClick={() => handleArchive(slot)}
                                 >
                                   📦 Archive
                                 </button>
                                 <button
+                                  title={
+                                    'Delete this slot permanently. Note that this action cannot be undone!'
+                                  }
                                   className="ap-action-btn danger"
                                   onClick={() => handleDelete(slot)}
                                 >
@@ -1678,6 +1961,9 @@ export default function AdminPage() {
                               </div>
                               <div className="ap-archive-actions">
                                 <button
+                                  title={
+                                    'Unarchive this booking so it can be actioned upon again. It will be moved to the "Manage Bookings" section.'
+                                  }
                                   className="ap-action-btn success"
                                   onClick={() => handleArchive(slot)}
                                 >
