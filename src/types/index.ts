@@ -43,8 +43,8 @@ export interface AuthUser {
   identifier: string;
   email: string | undefined;
   phone: string | undefined;
-  balancePayments: number;
   role: 'user' | 'admin';
+  balancePayments?: number;
 }
 
 export interface AuthResponse {

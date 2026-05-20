@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
-import { getSlots, updatePlayer, updatePayment } from '../api/api';
-import type { Slot, Player, GroupedSlots } from '../types';
+import { getSlots, updatePlayer, updatePayment, getSelf } from '../api/api';
+import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
 
 const PLAYER_COUNT = 6;
@@ -86,8 +86,18 @@ export default function IndexPage() {
   const [modal, setModal] = useState<ModalState>(CLOSED_MODAL);
   const [editingKey, setEditingKey] = useState<string | null>(null); // "slotId_playerIndex"
   const [editValue, setEditValue] = useState('');
+  const [selfUser, setSelfUser] = useState<User | null>(null);
 
   // ── fetch ─────────────────────────────────────────────────────────────────
+  const fetchSelf = useCallback(async () => {
+    try {
+      const res = await getSelf();
+      setSelfUser(res.data.user);
+    } catch {
+      // silently fail
+    }
+  }, []);
+
   const fetchSlots = useCallback(async (quiet = false) => {
     if (!quiet) {
       setLoaderMsg('Loading bookings...');
@@ -109,9 +119,9 @@ export default function IndexPage() {
   useEffect(() => {
     if (didInit.current) return;
     didInit.current = true;
-
     fetchSlots();
-  }, [fetchSlots]);
+    fetchSelf();
+  }, [fetchSlots, fetchSelf]);
 
   // ── okay helper (wrapped by confirm helper)──────────────────────────────
   function showOkayMsg(
@@ -184,6 +194,7 @@ export default function IndexPage() {
     try {
       await updatePayment(slotId, { playerIndex: idx, paymentStatus: status, lastUpdatedAt });
       await fetchSlots(true);
+      fetchSelf();
     } catch (err) {
       const msg =
         (err as AxiosError<{ message: string }>).response?.data?.message ?? 'Payment update failed';
@@ -404,6 +415,8 @@ export default function IndexPage() {
           position: sticky;
           top: 0;
           z-index: 100;
+          flex-wrap: wrap;  
+          gap: 8px;
         }
 
         .ip-topbar-brand {
@@ -419,7 +432,8 @@ export default function IndexPage() {
         .ip-topbar-right {
           display: flex;
           align-items: center;
-          gap: 12px;
+          gap: 8px;
+          flex-wrap: wrap;
         }
 
         .ip-topbar-label {
@@ -754,6 +768,9 @@ export default function IndexPage() {
             }
             .ip-col-ts-name { font-size: 10px; }
             .ip-col-ts-time { font-size: 9px; }
+            .ip-topbar { padding: 10px 14px; }
+            .ip-topbar-label { display: none; }  
+            .ip-topbar-brand { font-size: 15px; }
         }
       `}</style>
 
@@ -800,8 +817,20 @@ export default function IndexPage() {
         <div className="ip-topbar">
           <div className="ip-topbar-brand">🏸 SBC Badminton</div>
           <div className="ip-topbar-right">
-            <span className="ip-topbar-label">Balance payments:</span>
-            <span className="ip-topbar-email">{`$${user?.balancePayments}`}</span>
+            {selfUser?.balancePayments !== undefined && (
+              <>
+                <span className="ip-topbar-label">Balance:</span>
+                <span
+                  style={{
+                    fontSize: '14px',
+                    fontWeight: 600,
+                    color: selfUser.balancePayments > 0 ? '#f59e0b' : '#22c55e',
+                  }}
+                >
+                  ${selfUser.balancePayments}
+                </span>
+              </>
+            )}
             <span className="ip-topbar-label">Logged in as:</span>
             <span className="ip-topbar-email">{user?.name}</span>
             {user?.role === 'admin' && (

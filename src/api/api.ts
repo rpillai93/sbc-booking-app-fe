@@ -9,6 +9,7 @@ import type {
   RegisterResponse,
   UpdateAmountPayload,
   GetUsersResponse,
+  User,
 } from '../types';
 
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:5000/api';
@@ -21,6 +22,9 @@ export const login = (data: LoginPayload) => axios.post<AuthResponse>(`${BASE}/a
 
 export const register = (data: RegisterPayload) =>
   axios.post<RegisterResponse>(`${BASE}/auth/register`, data);
+
+export const getSelf = () =>
+  axios.get<{ user: User }>(`${BASE}/users/me`, { headers: getHeaders() });
 
 export const resetByKey = (data: ResetByKeyPayload) =>
   axios.post<ResetByKeyResponse>(`${BASE}/auth/reset-by-key`, data);

@@ -14,6 +14,7 @@ import {
   approveUser,
   deleteUser,
   addUserComments,
+  getSelf,
 } from '../api/api';
 import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
@@ -169,6 +170,7 @@ export default function AdminPage() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [userSortKey, setUserSortKey] = useState<UserSortKey>('name');
   const [userSortDir, setUserSortDir] = useState<SortDir>('asc');
+  const [selfUser, setSelfUser] = useState<User | null>(null);
 
   // ── fetch slots ──────────────────────────────────────────────────────────
   const fetchSlots = useCallback(async (quiet = false) => {
@@ -184,6 +186,15 @@ export default function AdminPage() {
   }, []);
 
   // ── fetch users ──────────────────────────────────────────────────────────
+  const fetchSelf = useCallback(async () => {
+    try {
+      const res = await getSelf();
+      setSelfUser(res.data.user);
+    } catch {
+      // silently fail — not critical
+    }
+  }, []);
+
   const fetchUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
@@ -203,7 +214,8 @@ export default function AdminPage() {
     if (didInit.current) return;
     didInit.current = true;
     fetchSlots();
-  }, [fetchSlots]);
+    fetchSelf();
+  }, [fetchSlots, fetchSelf]);
 
   // Fetch users when tab switches to users
   useEffect(() => {
@@ -559,6 +571,7 @@ export default function AdminPage() {
     setApplyModal(APPLY_CLOSED);
     setEditingTotal(false);
     setTotalInputValue('');
+    fetchSelf();
 
     await withLoader('Saving amounts...', async () => {
       await Promise.all(
@@ -714,7 +727,6 @@ export default function AdminPage() {
   const commentIsEmpty = commentModal.value.trim().length === 0;
   const commentOverLimit = commentModal.value.length > COMMENT_LIMIT;
   const commentSaveDisabled = commentSaving || commentIsEmpty || commentOverLimit;
-
   // ── render ────────────────────────────────────────────────────────────────
   return (
     <>
@@ -740,6 +752,9 @@ export default function AdminPage() {
         .ap-topbar-right { display: flex; align-items: center; gap: 10px; }
         .ap-email-label { font-size: 12px; color: #555; }
         .ap-email { font-size: 14px; color: #fff; }
+        .ap-balance-payments-label { font-size: 12px; color: #555; }
+        .ap-balance-payments.positive { font-size: 14px; color: #f59e0b; }
+        .ap-balance-payments.negative { font-size: 14px; color: #22c55e; }
         .ap-player-btn {
           background: #22c55e; color: #000; border: none; border-radius: 7px;
           padding: 7px 13px; font-family: 'Syne', sans-serif; font-size: 12px;
@@ -1564,8 +1579,12 @@ export default function AdminPage() {
             🏸 SBC Admin <span className="ap-badge">ADMIN</span>
           </div>
           <div className="ap-topbar-right">
-            <span className="ap-email-label">Balance payments:</span>
-            <span className="ap-email">{`$${user?.balancePayments}`}</span>
+            <span className="ap-balance-payments-label">Balance payments:</span>
+            <span
+              className={`ap-balance-payments ${(selfUser?.balancePayments ?? 0) > 0 ? 'positive' : 'negative'}`}
+            >
+              {selfUser ? `$${selfUser.balancePayments}` : '—'}
+            </span>
             <span className="ap-email-label">Logged in as:</span>
             <span className="ap-email">{user?.name}</span>
             <button className="ap-player-btn" onClick={() => navigate('/')}>
