@@ -45,10 +45,11 @@ export const updatePlayer = (
 export const updateAmount = (id: string, data: UpdateAmountPayload) =>
   axios.patch(`${BASE}/slots/${id}/amount`, data, { headers: getHeaders() });
 
-export const updatePayment = (
-  id: string,
-  data: { playerIndex: number; paymentStatus: boolean; lastUpdatedAt: string },
-) => axios.patch(`${BASE}/slots/${id}/payment`, data, { headers: getHeaders() });
+export const updatePayment = (id: string, data: { playerIndex: number; lastUpdatedAt: string }) =>
+  axios.patch(`${BASE}/slots/${id}/payment`, data, { headers: getHeaders() });
+
+export const settlePayment = (id: string, data: { amount: number }) =>
+  axios.patch(`${BASE}/users/${id}/settle`, data, { headers: getHeaders() });
 
 export const lockSlot = (id: string, data: { isLocked: boolean }) =>
   axios.patch(`${BASE}/slots/${id}/lock`, data, { headers: getHeaders() });

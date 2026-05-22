@@ -183,16 +183,11 @@ export default function IndexPage() {
   }
 
   // ── update payment ────────────────────────────────────────────────────────
-  async function doUpdatePayment(
-    slotId: string,
-    idx: number,
-    status: boolean,
-    lastUpdatedAt: string,
-  ) {
-    setLoaderMsg(status ? 'Confirming payment...' : 'Removing payment...');
+  async function doUpdatePayment(slotId: string, idx: number, lastUpdatedAt: string) {
+    setLoaderMsg('Confirming payment...');
     setLoading(true);
     try {
-      await updatePayment(slotId, { playerIndex: idx, paymentStatus: status, lastUpdatedAt });
+      await updatePayment(slotId, { playerIndex: idx, lastUpdatedAt });
       await fetchSlots(true);
       fetchSelf();
     } catch (err) {
@@ -261,12 +256,23 @@ export default function IndexPage() {
     const key = `${slot._id}_${globalIdx}`;
     const isEditingThis = editingKey === key;
     const locked = slot.slotLocked;
-    const paymentCheckDisabled = !locked || blank || !p.playerAmt || p.playerAmt === 0;
+    const paymentCheckDisabled =
+      blank ||
+      !locked ||
+      p.playerAmt == null ||
+      p.playerAmt < 0 ||
+      (p.playerAmt == 0 && slot.slotAmountPublished) ||
+      p.payment;
 
     let nameClass = 'ip-name';
     if (!isWl) nameClass += blank ? ' available' : ' filled';
     else nameClass += blank ? ' wl-empty' : ' wl-filled';
-
+    const playerAmtToShow =
+      !blank && slot.slotAmountPublished && slot.slotLocked
+        ? p.playerAmt > 0
+          ? `$${p.playerAmt}`
+          : `-$${Math.abs(p.playerAmt)}`
+        : '';
     return (
       <div key={key} className={`ip-player-row${locked ? ' ip-locked' : ''}`}>
         {/* label */}
@@ -323,14 +329,23 @@ export default function IndexPage() {
         <div className="ip-col-pay">
           <div className="ip-pay-stack">
             {/* amount — only show when a real amount exists */}
-            <span className="ip-player-amt">
-              {!blank && p.playerAmt > 0 && slot.slotLocked
-                ? `$${p.playerAmt % 1 === 0 ? p.playerAmt : p.playerAmt.toFixed(2)}`
-                : ''}
+            <span
+              className="ip-player-amt"
+              style={{
+                color: p.playerAmt > 0 && !p.payment ? '#f59e0b' : '#22c55e',
+              }}
+            >
+              {p.payment || p.playerAmt < 0 || (p.playerAmt == 0 && slot.slotAmountPublished) ? (
+                <s>{playerAmtToShow}</s>
+              ) : (
+                playerAmtToShow
+              )}
             </span>
             <input
               type="checkbox"
-              checked={p.payment}
+              checked={
+                p.payment || p.playerAmt < 0 || (p.playerAmt == 0 && slot.slotAmountPublished)
+              }
               disabled={paymentCheckDisabled}
               style={{
                 cursor: paymentCheckDisabled ? 'not-allowed' : 'pointer',
@@ -339,12 +354,12 @@ export default function IndexPage() {
               onChange={(e) => {
                 const checked = e.target.checked;
                 const prev = !checked;
-                const amt = `$${p.playerAmt.toFixed(2)}`;
+                const amt = p.playerAmt > 0 ? `$${p.playerAmt}` : `-$${p.playerAmt}`;
                 confirm(
                   checked
                     ? `Confirm payment of <b>${amt}</b> by <b>${p.name}</b>?`
                     : `Remove payment of <b>${amt}</b> by <b>${p.name}</b>?`,
-                  () => doUpdatePayment(slot._id, globalIdx, checked, slot.updatedAt),
+                  () => doUpdatePayment(slot._id, globalIdx, slot.updatedAt),
                   () => {
                     e.target.checked = prev;
                   },
@@ -649,7 +664,6 @@ export default function IndexPage() {
         .ip-player-amt {
           font-size: 11px;
           font-weight: 700;
-          color: #ffffff;
           letter-spacing: 0.2px;
           min-height: 14px; /* keeps row height stable when no amount */
           line-height: 1;
@@ -769,7 +783,6 @@ export default function IndexPage() {
             .ip-col-ts-name { font-size: 10px; }
             .ip-col-ts-time { font-size: 9px; }
             .ip-topbar { padding: 10px 14px; }
-            .ip-topbar-label { display: none; }  
             .ip-topbar-brand { font-size: 15px; }
         }
       `}</style>
@@ -798,15 +811,17 @@ export default function IndexPage() {
               >
                 {modal.confirmLabel}
               </button>
-              <button
-                className="ip-modal-btn ip-modal-cancel"
-                onClick={() => {
-                  setModal(CLOSED_MODAL);
-                  modal.onCancel?.();
-                }}
-              >
-                Cancel
-              </button>
+              {!modal.hideCancel && (
+                <button
+                  className="ip-modal-btn ip-modal-cancel"
+                  onClick={() => {
+                    setModal(CLOSED_MODAL);
+                    modal.onCancel?.();
+                  }}
+                >
+                  Cancel
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -819,15 +834,19 @@ export default function IndexPage() {
           <div className="ip-topbar-right">
             {selfUser?.balancePayments !== undefined && (
               <>
-                <span className="ip-topbar-label">Balance:</span>
+                <span className="ip-topbar-label">Outstanding Payments:</span>
                 <span
                   style={{
                     fontSize: '14px',
                     fontWeight: 600,
-                    color: selfUser.balancePayments > 0 ? '#f59e0b' : '#22c55e',
+                    color: selfUser && selfUser.balancePayments > 0 ? '#f59e0b' : '#22c55e',
                   }}
                 >
-                  ${selfUser.balancePayments}
+                  {selfUser && selfUser.balancePayments
+                    ? selfUser.balancePayments > 0
+                      ? `$${Math.round(selfUser.balancePayments * 100) / 100}`
+                      : `-$${Math.round(Math.abs(selfUser.balancePayments) * 100) / 100}`
+                    : `$0`}
                 </span>
               </>
             )}
@@ -937,8 +956,7 @@ export default function IndexPage() {
                               <div className="ip-payment-info">
                                 {
                                   <>
-                                    Admins will update the payment amount in the "PAYMENT" column at
-                                    the end of the session. Send payment via Interac to{' '}
+                                    Please send the payment via Interac to{' '}
                                     <strong>
                                       <u>grow@raghavv.ca</u>
                                     </strong>

@@ -15,6 +15,7 @@ import {
   deleteUser,
   addUserComments,
   getSelf,
+  settlePayment,
 } from '../api/api';
 import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
@@ -67,17 +68,10 @@ const APPLY_CLOSED: ApplyModalState = {
 };
 
 // ─── users sort ───────────────────────────────────────────────────────────────
-type UserSortKey = 'name' | 'contact' | 'lastLogin' | 'profileApproved';
+type UserSortKey = 'name' | 'contact' | 'lastLogin' | 'netPayments' | 'profileApproved';
 type SortDir = 'asc' | 'desc';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-function computeGroupTotal(slots: Slot[]): number {
-  return slots
-    .filter((s) => !s.slotArchived)
-    .flatMap((s) => [...s.players, ...s.waitList])
-    .reduce((sum, p) => sum + (p.playerAmt ?? 0), 0);
-}
-
 function fmt(n: number): string {
   if (n % 1 === 0) {
     return String(n);
@@ -224,6 +218,14 @@ export default function AdminPage() {
     usersFetched.current = true;
     fetchUsers();
   }, [activeTab, fetchUsers]);
+
+  useEffect(() => {
+    function handleGlobalClick() {
+      setSettleHovered(null);
+    }
+    document.addEventListener('click', handleGlobalClick);
+    return () => document.removeEventListener('click', handleGlobalClick);
+  }, []);
 
   // ── okay helper (wrapped by confirm helper)──────────────────────────────
   function showOkayMsg(
@@ -529,12 +531,12 @@ export default function AdminPage() {
     });
   }
 
-  function handleSaveApplyModal(applyPlayerCount: number, runningTotal: number) {
+  function handleSaveApplyModal(applyPlayerCount: number, originalTotal: number) {
     confirm(
-      `Confirm <b>$${fmt(runningTotal)}</b> (including birdies + tax) as the total for <b>${applyPlayerCount}</b> players for this session?`,
+      `Confirm <b>$${fmt(originalTotal)}</b> (including birdies + tax) as the total for <b>${applyPlayerCount}</b> players for this session?`,
       async () => {
         try {
-          await saveApplyModal();
+          await saveApplyModal(originalTotal);
         } catch {
           showOkayMsg('Failed to apply the amount. Please try again.');
         }
@@ -546,17 +548,19 @@ export default function AdminPage() {
     );
   }
 
-  async function saveApplyModal() {
+  async function saveApplyModal(originalTotal: number) {
     const { rows, groupKey } = applyModal;
     const bySlot = new Map<
       string,
       {
+        totalAmt: number;
         players: { _id: string; playerAmt: number }[];
         waitList: { _id: string; playerAmt: number }[];
       }
     >();
     for (const row of rows) {
-      if (!bySlot.has(row.slotId)) bySlot.set(row.slotId, { players: [], waitList: [] });
+      if (!bySlot.has(row.slotId))
+        bySlot.set(row.slotId, { totalAmt: originalTotal, players: [], waitList: [] });
       const entry = bySlot.get(row.slotId)!;
       const amt = parseFloat(row.amount) || 0;
       if (row.isWaitList) entry.waitList.push({ _id: row.playerId, playerAmt: amt });
@@ -566,24 +570,26 @@ export default function AdminPage() {
       .flat()
       .filter((s) => !s.slotArchived && `${s.date}__${s.time}` === groupKey);
     for (const slot of activeSlots) {
-      if (!bySlot.has(slot._id)) bySlot.set(slot._id, { players: [], waitList: [] });
+      if (!bySlot.has(slot._id))
+        bySlot.set(slot._id, { totalAmt: originalTotal, players: [], waitList: [] });
     }
     setApplyModal(APPLY_CLOSED);
     setEditingTotal(false);
     setTotalInputValue('');
-    fetchSelf();
 
     await withLoader('Saving amounts...', async () => {
       await Promise.all(
         Array.from(bySlot.entries()).map(([slotId, data]) =>
-          updateAmount(slotId, { players: data.players, waitList: data.waitList }),
+          updateAmount(slotId, {
+            totalAmt: data.totalAmt,
+            players: data.players,
+            waitList: data.waitList,
+          }),
         ),
       );
     });
-  }
 
-  function getDisplayTotal(slots: Slot[]): number {
-    return computeGroupTotal(slots);
+    fetchSelf(); //Ensure the current user's balance payment is updated after the payment is posted to the server
   }
 
   function handleCourtNoSave(slot: Slot, newValue: string) {
@@ -677,6 +683,10 @@ export default function AdminPage() {
         cmp = ta - tb;
       } else if (userSortKey === 'profileApproved') {
         cmp = a.profileApproved === b.profileApproved ? 0 : a.profileApproved ? -1 : 1;
+      } else if (userSortKey === 'netPayments') {
+        const pa = parseFloat((a.balancePayments ?? '0').toString().replace('$', ''));
+        const pb = parseFloat((b.balancePayments ?? '0').toString().replace('$', ''));
+        cmp = pa - pb;
       }
       return userSortDir === 'asc' ? cmp : -cmp;
     });
@@ -727,6 +737,56 @@ export default function AdminPage() {
   const commentIsEmpty = commentModal.value.trim().length === 0;
   const commentOverLimit = commentModal.value.length > COMMENT_LIMIT;
   const commentSaveDisabled = commentSaving || commentIsEmpty || commentOverLimit;
+
+  // ── settle payments ────────────────────────────────────────────────────────────────
+  const [settleModal, setSettleModal] = useState<{
+    open: boolean;
+    userId: string;
+    name: string;
+    balance: number;
+    value: string;
+  }>({ open: false, userId: '', name: '', balance: 0, value: '' });
+  const [settleHovered, setSettleHovered] = useState<string | null>(null);
+  const [settleSaving, setSettleSaving] = useState(false);
+
+  function openSettleModal(u: User) {
+    setSettleModal({
+      open: true,
+      userId: u._id,
+      name: u.name,
+      balance: u.balancePayments,
+      value: '',
+    });
+  }
+
+  function closeSettleModal() {
+    setSettleModal({ open: false, userId: '', name: '', balance: 0, value: '' });
+  }
+
+  async function handleSettle() {
+    const amt = parseFloat(settleModal.value);
+    setSettleSaving(true);
+    try {
+      await settlePayment(settleModal.userId, { amount: amt });
+      fetchUsers();
+      fetchSelf();
+      setUsers((prev) =>
+        prev.map((u) =>
+          u._id === settleModal.userId
+            ? { ...u, balancePayments: Math.round((u.balancePayments - amt) * 100) / 100 }
+            : u,
+        ),
+      );
+      closeSettleModal();
+    } catch {
+      showOkayMsg('Failed to settle payment. Please try again.');
+    } finally {
+      setSettleSaving(false);
+    }
+  }
+
+  const settleAmt = parseFloat(settleModal.value);
+  const settleInvalid = isNaN(settleAmt) || settleAmt <= 0 || settleAmt > settleModal.balance;
   // ── render ────────────────────────────────────────────────────────────────
   return (
     <>
@@ -753,8 +813,6 @@ export default function AdminPage() {
         .ap-email-label { font-size: 12px; color: #555; }
         .ap-email { font-size: 14px; color: #fff; }
         .ap-balance-payments-label { font-size: 12px; color: #555; }
-        .ap-balance-payments.positive { font-size: 14px; color: #f59e0b; }
-        .ap-balance-payments.negative { font-size: 14px; color: #22c55e; }
         .ap-player-btn {
           background: #22c55e; color: #000; border: none; border-radius: 7px;
           padding: 7px 13px; font-family: 'Syne', sans-serif; font-size: 12px;
@@ -934,7 +992,6 @@ export default function AdminPage() {
           .ap-create-btn { width: 100%; }
           .ap-topbar { padding: 12px 14px; flex-wrap: wrap; gap: 8px; }
           .ap-topbar-right { gap: 8px; flex-wrap: wrap; }
-          .ap-email-label { display: none; }
           .ap-container { padding: 16px 12px 60px; }
         }
         @media (max-width: 520px) {
@@ -1015,6 +1072,54 @@ export default function AdminPage() {
         .usr-login { font-size: 12px; color: #666; white-space: nowrap; }
         .usr-login-never { font-size: 12px; color: #333; font-style: italic; }
         .usr-remove-txt { font-family: 'DM Sans', sans-serif; font-size: 12px; color: #888; }
+
+        /* ── net payments cell ── */
+        .usr-net-pay {
+          font-size: 13px;
+          font-weight: 600;
+          white-space: nowrap;
+          cursor: default;
+          transition: opacity 0.15s;
+        }
+        .usr-net-pay-cell {
+          position: relative;
+          min-width: 100px;
+        }
+        .usr-settle-btn {
+          background: #f59e0b18;
+          border: 1px solid #f59e0b55;
+          color: #fbbf24;
+          font-family: 'Syne', sans-serif;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 0.5px;
+          padding: 5px 10px;
+          border-radius: 999px;
+          cursor: pointer;
+          transition: background 0.15s, border-color 0.15s;
+          width: auto;
+          margin: 0;
+          white-space: nowrap;
+        }
+        .usr-settle-btn:hover { background: #f59e0b30; border-color: #f59e0b99; }
+
+        /* ── settle modal ── */
+        .usr-settle-input {
+          width: 100%;
+          padding: 10px 12px;
+          background: #111;
+          border: 1px solid #2e2e2e;
+          border-radius: 10px;
+          color: #f0f0f0;
+          font-family: 'DM Sans', sans-serif;
+          font-size: 14px;
+          outline: none;
+          transition: border-color 0.2s;
+          margin: 8px 0 4px;
+          text-align: center;
+        }
+        .usr-settle-input:focus { border-color: #22c55e; }
+        .usr-settle-input.invalid { border-color: #ef4444; }
 
         .usr-status-approved {
           display: inline-block;
@@ -1242,7 +1347,6 @@ export default function AdminPage() {
       {/* Apply amounts modal */}
       {applyModal.open &&
         (() => {
-          const runningTotal = applyModal.rows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
           const applyPlayerCount = applyModal.includeWaitlist
             ? applyModal.rows.length
             : applyModal.rows.filter((p) => !p.isWaitList).length;
@@ -1301,11 +1405,11 @@ export default function AdminPage() {
                         textUnderlineOffset: '3px',
                       }}
                       onClick={() => {
-                        setTotalInputValue(fmt(runningTotal));
+                        setTotalInputValue(fmt(applyModal.originalTotal));
                         setEditingTotal(true);
                       }}
                     >
-                      ${fmt(runningTotal)}
+                      ${fmt(applyModal.originalTotal)}
                     </span>
                   )}
                 </div>
@@ -1517,7 +1621,7 @@ export default function AdminPage() {
                 <div className="ap-apply-footer">
                   <button
                     className="ap-apply-save"
-                    onClick={() => handleSaveApplyModal(applyPlayerCount, runningTotal)}
+                    onClick={() => handleSaveApplyModal(applyPlayerCount, applyModal.originalTotal)}
                     disabled={applySaveDisabled}
                   >
                     Save
@@ -1572,6 +1676,54 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+      {/* Settle payment modal */}
+      {settleModal.open && (
+        <div className="ap-modal-backdrop">
+          <div className="ap-modal">
+            <div className="ap-modal-msg">
+              <strong>Settle up this balance:</strong>
+              <br />
+              <small style={{ color: '#555' }}>
+                {settleModal.name} · owes ${Math.round(settleModal.balance * 100) / 100}
+              </small>
+              <input
+                className={`usr-settle-input${settleInvalid && settleModal.value !== '' ? ' invalid' : ''}`}
+                type="number"
+                min={0.01}
+                max={settleModal.balance}
+                step={0.01}
+                placeholder={`0 – $${Math.round(settleModal.balance * 100) / 100}`}
+                value={settleModal.value}
+                autoFocus
+                onChange={(e) => setSettleModal((prev) => ({ ...prev, value: e.target.value }))}
+              />
+              {settleInvalid && settleModal.value !== '' && (
+                <div style={{ color: '#ef4444', fontSize: '12px', marginTop: '4px' }}>
+                  Amount cannot be greater than ${Math.round(settleModal.balance * 100) / 100}
+                </div>
+              )}
+            </div>
+            <div className="ap-modal-btns">
+              <button
+                className="ap-modal-btn"
+                style={{
+                  background: '#22c55e',
+                  color: '#000',
+                  opacity: settleInvalid || settleSaving ? 0.4 : 1,
+                  cursor: settleInvalid || settleSaving ? 'not-allowed' : 'pointer',
+                }}
+                disabled={settleInvalid || settleSaving}
+                onClick={handleSettle}
+              >
+                {settleSaving ? 'Saving...' : 'Confirm'}
+              </button>
+              <button className="ap-modal-btn ap-modal-cancel" onClick={closeSettleModal}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="ap-root">
         {/* Top bar */}
         <div className="ap-topbar">
@@ -1579,11 +1731,20 @@ export default function AdminPage() {
             🏸 SBC Admin <span className="ap-badge">ADMIN</span>
           </div>
           <div className="ap-topbar-right">
-            <span className="ap-balance-payments-label">Balance payments:</span>
+            <span className="ap-balance-payments-label">Outstanding payments:</span>
             <span
-              className={`ap-balance-payments ${(selfUser?.balancePayments ?? 0) > 0 ? 'positive' : 'negative'}`}
+              className="ap-balance-payments"
+              style={{
+                fontSize: '14px',
+                fontWeight: 600,
+                color: selfUser && selfUser.balancePayments > 0 ? '#f59e0b' : '#22c55e',
+              }}
             >
-              {selfUser ? `$${selfUser.balancePayments}` : '—'}
+              {selfUser && selfUser.balancePayments
+                ? selfUser.balancePayments > 0
+                  ? `$${Math.round(selfUser.balancePayments * 100) / 100}`
+                  : `-$${Math.round(Math.abs(selfUser.balancePayments) * 100) / 100}`
+                : `$0`}
             </span>
             <span className="ap-email-label">Logged in as:</span>
             <span className="ap-email">{user?.name}</span>
@@ -1654,7 +1815,8 @@ export default function AdminPage() {
                           '6:00 PM',
                           '7:00 PM',
                           '8:00 PM',
-                          '11:00 PM',
+                          '9:00 PM',
+                          '10:00 PM',
                         ].map((t) => (
                           <option key={t} value={t}>
                             {t}
@@ -1670,7 +1832,6 @@ export default function AdminPage() {
                         onChange={(e) => setCreateTo(e.target.value)}
                       >
                         {[
-                          '7:00 AM',
                           '8:00 AM',
                           '9:00 AM',
                           '10:00 AM',
@@ -1685,6 +1846,7 @@ export default function AdminPage() {
                           '7:00 PM',
                           '8:00 PM',
                           '9:00 PM',
+                          '10:00 PM',
                           '11:00 PM',
                         ].map((t) => (
                           <option key={t} value={t}>
@@ -1739,7 +1901,7 @@ export default function AdminPage() {
                     const activeSlots = slots.filter((s) => !s.slotArchived);
                     const first = activeSlots[0];
                     const groupKey = `${first.date}__${first.time}`;
-                    const displayTotal = getDisplayTotal(activeSlots);
+                    const displayTotal = Math.round((first.slotTotalAmount * 100) / 100);
                     const isEditingAmt = editAmtKey === groupKey;
                     return (
                       <div key={key} className="ap-group">
@@ -2101,6 +2263,16 @@ export default function AdminPage() {
                             />
                           </span>
                         </th>
+                        <th style={{ minWidth: 110 }}>
+                          <span className="usr-th-inner"></span>
+                          OUTSTANDING PAYMENTS{' '}
+                          <SortArrow
+                            col="netPayments"
+                            activeKey={userSortKey}
+                            dir={userSortDir}
+                            onSort={handleUserSort}
+                          />
+                        </th>
                         <th style={{ width: 140 }} className="center">
                           <span className="usr-th-inner" style={{ justifyContent: 'center' }}>
                             APPROVAL STATUS{' '}
@@ -2145,6 +2317,50 @@ export default function AdminPage() {
                               <span className="usr-login">{formatLastLogin(u.lastLogin)}</span>
                             ) : (
                               <span className="usr-login-never">Never</span>
+                            )}
+                          </td>
+                          <td
+                            className="usr-net-pay-cell"
+                            onMouseEnter={() =>
+                              u.balancePayments > 0 ? setSettleHovered(u._id) : undefined
+                            }
+                            onMouseLeave={() => setSettleHovered(null)}
+                            onClick={() => {
+                              if (u.balancePayments > 0) {
+                                // on mobile tap: if not already showing the button, show it first;
+                                // second tap (when button is shown) does nothing — the button itself handles it
+                                if (settleHovered !== u._id) {
+                                  setSettleHovered(u._id);
+                                }
+                              }
+                            }}
+                          >
+                            {settleHovered === u._id && u.balancePayments > 0 ? (
+                              <button
+                                className="usr-settle-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation(); // prevent the td onClick from re-triggering
+                                  openSettleModal(u);
+                                  setSettleHovered(null);
+                                }}
+                              >
+                                SETTLE UP?
+                              </button>
+                            ) : (
+                              <span
+                                className="usr-net-pay"
+                                style={{
+                                  color: u.balancePayments > 0 ? '#f59e0b' : '#22c55e',
+                                  // hint on mobile that positive values are tappable
+                                  cursor: u.balancePayments > 0 ? 'pointer' : 'default',
+                                }}
+                              >
+                                {u.balancePayments > 0
+                                  ? `$${Math.round(u.balancePayments * 100) / 100}`
+                                  : u.balancePayments < 0
+                                    ? `-$${Math.round(Math.abs(u.balancePayments) * 100) / 100}`
+                                    : '$0'}
+                              </span>
                             )}
                           </td>
                           <td className="center">

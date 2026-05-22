@@ -149,6 +149,8 @@ export default function LoginPage() {
   const [contactMode, setContactMode] = useState<'email' | 'phone'>('email');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
+  const [tosAgreed1, setTosAgreed1] = useState(false);
+  const [tosAgreed2, setTosAgreed2] = useState(false);
 
   // reset mode
   const [resetIdentifier, setResetIdentifier] = useState('');
@@ -214,12 +216,18 @@ export default function LoginPage() {
       return;
     }
 
+    if (!tosAgreed1 || !tosAgreed2) {
+      setError('You must agree to both disclaimers to create an account.');
+      return;
+    }
     setLoading(true);
     try {
       const res = await register({
         firstName,
         lastName,
         password,
+        tosAgreed1,
+        tosAgreed2,
         ...(contactMode === 'email' ? { email } : { phone }),
       });
       // Show the key modal before logging in
@@ -286,6 +294,8 @@ export default function LoginPage() {
     setConfirmNewPassword('');
     setShowNewPassword(false);
     setShowConfirmNew(false);
+    setTosAgreed1(false);
+    setTosAgreed2(false);
   }
 
   // ── render ───────────────────────────────────────────────────────────────────
@@ -875,7 +885,65 @@ export default function LoginPage() {
                   <p className="lp-pw-hint mismatch">✗ Passwords do not match</p>
                 )}
               </div>
+              <div className="lp-field">
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={tosAgreed1}
+                    onChange={(e) => setTosAgreed1(e.target.checked)}
+                    style={{
+                      marginTop: '3px',
+                      accentColor: '#22c55e',
+                      flexShrink: 0,
+                      width: 15,
+                      height: 15,
+                    }}
+                  />
+                  <span style={{ fontSize: '12px', color: '#888', lineHeight: '1.5' }}>
+                    <strong style={{ color: '#aaa' }}>Agree</strong> — Surrey Badminton Club and its
+                    owners shall bear no responsibility or liability for the operation,
+                    administration, or management of this website. This website is independently
+                    operated by casual players who participate at SBC.
+                  </span>
+                </label>
+              </div>
 
+              <div className="lp-field">
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '10px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={tosAgreed2}
+                    onChange={(e) => setTosAgreed2(e.target.checked)}
+                    style={{
+                      marginTop: '3px',
+                      accentColor: '#22c55e',
+                      flexShrink: 0,
+                      width: 15,
+                      height: 15,
+                    }}
+                  />
+                  <span style={{ fontSize: '12px', color: '#888', lineHeight: '1.5' }}>
+                    <strong style={{ color: '#aaa' }}>Agree</strong> — The administrators of this
+                    website do not collect, process, or use personal information for commercial
+                    purposes or financial gain. This website is maintained solely to facilitate
+                    booking management for members of the SBC WhatsApp Group.
+                  </span>
+                </label>
+              </div>
               {error && <div className="lp-error">⚠ {error}</div>}
 
               <button className="lp-btn" type="submit" disabled={loading || passwordsMismatch}>

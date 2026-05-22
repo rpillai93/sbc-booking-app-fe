@@ -18,6 +18,7 @@ export interface Slot {
   slotHidden: boolean;
   slotArchived: boolean;
   slotAmountPublished: boolean;
+  slotTotalAmount: number;
   players: Player[];
   waitList: Player[];
   createdAt: string;
@@ -25,6 +26,7 @@ export interface Slot {
 }
 
 export interface UpdateAmountPayload {
+  totalAmt: number;
   players: { _id: string; playerAmt: number }[];
   waitList: { _id: string; playerAmt: number }[];
 }
@@ -68,6 +70,8 @@ export interface RegisterPayload {
   email?: string;
   phone?: string;
   password: string;
+  tosAgreed1: boolean;
+  tosAgreed2: boolean;
 }
 
 export interface ResetByKeyPayload {
