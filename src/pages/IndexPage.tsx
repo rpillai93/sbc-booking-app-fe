@@ -679,9 +679,8 @@ export default function IndexPage() {
           border-radius: 999px;
           text-align: center;
           transition: opacity 0.15s;
-          display: inline-block;
+          display: block;
           width: 100%;
-           max-width: 110px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -786,6 +785,10 @@ export default function IndexPage() {
             .ip-grid-header, .ip-player-row {
                 grid-template-columns: 36px 1fr 80px 52px 40px;
                 column-gap: 5px;
+            }
+            .ip-name {
+              padding: 5px 7px;
+              font-size: 12px;
             }
             .ip-col-ts-name { font-size: 10px; }
             .ip-col-ts-time { font-size: 9px; }
