@@ -14,6 +14,7 @@ export interface Slot {
   date: string;
   time: string;
   courtNo: number;
+  numberOfCourts: number;
   slotLocked: boolean;
   slotHidden: boolean;
   slotArchived: boolean;

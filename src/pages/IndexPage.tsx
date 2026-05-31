@@ -5,9 +5,6 @@ import { getSlots, updatePlayer, updatePayment, getSelf } from '../api/api';
 import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
 
-const PLAYER_COUNT = 6;
-const WL_COUNT = 4;
-
 // ─── tiny modal hook ────────────────────────────────────────────────────────
 interface ModalState {
   open: boolean;
@@ -204,16 +201,16 @@ export default function IndexPage() {
   function startEdit(slot: Slot, idx: number) {
     if (editingKey) return;
     const key = `${slot._id}_${idx}`;
-    const isWl = idx >= PLAYER_COUNT;
-    const p = isWl ? slot.waitList[idx - PLAYER_COUNT] : slot.players[idx];
+    const isWl = idx >= slot.players.length;
+    const p = isWl ? slot.waitList[idx - slot.players.length] : slot.players[idx];
     setEditValue(isBlank(p) ? '' : p.name);
     setEditingKey(key);
   }
 
   function commitEdit(slot: Slot, idx: number) {
     const trimmed = editValue.trim();
-    const isWl = idx >= PLAYER_COUNT;
-    const p = isWl ? slot.waitList[idx - PLAYER_COUNT] : slot.players[idx];
+    const isWl = idx >= slot.players.length;
+    const p = isWl ? slot.waitList[idx - slot.players.length] : slot.players[idx];
     const original = isBlank(p) ? '' : p.name;
 
     if (trimmed === original) {
@@ -222,7 +219,7 @@ export default function IndexPage() {
     }
 
     const isDelete = !trimmed;
-    const isMainPlayer = idx < PLAYER_COUNT;
+    const isMainPlayer = idx < slot.players.length;
 
     const suffix =
       isDelete && isMainPlayer
@@ -245,12 +242,14 @@ export default function IndexPage() {
 
   // ── render player row ─────────────────────────────────────────────────────
   function renderPlayer(slot: Slot, globalIdx: number) {
-    const isWl = globalIdx >= PLAYER_COUNT;
-    const localIdx = isWl ? globalIdx - PLAYER_COUNT : globalIdx;
+    const isWl = globalIdx >= slot.players.length;
+    const localIdx = isWl ? globalIdx - slot.players.length : globalIdx;
     const p: Player = isWl
       ? (slot.waitList[localIdx] ?? emptyPlayer())
       : (slot.players[localIdx] ?? emptyPlayer());
 
+    const isAdmin = selfUser?.role === 'admin';
+    const showTs = p.ownerIdentifier == selfUser?.email || p.ownerIdentifier == selfUser?.phone;
     const label = isWl ? `WL${localIdx + 1}` : `P${globalIdx + 1}`;
     const blank = isBlank(p);
     const key = `${slot._id}_${globalIdx}`;
@@ -319,8 +318,12 @@ export default function IndexPage() {
             ''
           ) : (
             <>
-              <span className="ip-col-ts-name">{p.ownerName || ''}</span>
-              <span className="ip-col-ts-time">{formatTimestamp(p.timeStamp)}</span>
+              <span className="ip-col-ts-name">
+                {showTs ? '✅' : isAdmin ? p.ownerName || '' : ''}
+              </span>
+              <span className="ip-col-ts-time">
+                {showTs || isAdmin ? formatTimestamp(p.timeStamp) : ''}
+              </span>
             </>
           )}
         </div>
@@ -380,7 +383,7 @@ export default function IndexPage() {
               disabled={locked}
               onClick={() => {
                 const suffix =
-                  globalIdx < PLAYER_COUNT
+                  globalIdx < slot.players.length
                     ? '<small><br><b>NOTE:</b> You cannot undo this action. If there are players in waitlist, they will be given preference. Speak to an admin for any changes.</small>'
                     : '';
                 confirm(
@@ -874,8 +877,13 @@ export default function IndexPage() {
               <div className="ip-rules-body">
                 <h4>1. Cancellation Policy</h4>
                 <ul>
-                  <li>Cancel within 24 hours → must find replacement or pay</li>
-                  <li>Replacement must be confirmed, not just informed</li>
+                  <li>
+                    Slots will lock 24 hours before play → Contact admins on WhatsApp group for any
+                    changes.
+                  </li>
+                  <li>Cancellation or replacement more than 24 hours before → permitted</li>
+                  <li>Cancellation under 24 hours → must find replacement or pay</li>
+                  <li>Replacement must be confirmed with admins, not just informed</li>
                   <li>No frequent last-minute cancellations</li>
                 </ul>
                 <h4>2. No-Show Policy</h4>
@@ -885,27 +893,40 @@ export default function IndexPage() {
                 <h4>3. Payment Rule</h4>
                 <ul>
                   <li>Payment must be completed within 24 hours after play</li>
+                  <li>Please tick "Payment" checkbox after sending payment</li>
+                  <li>
+                    If one account is used to add family or friends, this account is responsible for
+                    tracking payment on this site
+                  </li>
                 </ul>
-                <h4>4. Gameplay & Rotation</h4>
+                <h4>4. Player Limit</h4>
+                <ul>
+                  <li>1 or 2 courts booked → Max 6 players per court</li>
+                  <li>More than 2 courts → Max 7 players per court</li>
+                </ul>
+                <h4>5. Gameplay & Rotation</h4>
                 <ul>
                   <li>All skill levels welcome · Rotate after 2 games</li>
                   <li>No fixed groups · Be fair and inclusive</li>
                 </ul>
-                <h4>5. Waitlist System</h4>
+                <h4>6. Waitlist System</h4>
                 <ul>
                   <li>Waitlist applies when full · First come first serve</li>
-                  <li>Cancelling player finds replacement</li>
+                  <li>Cancelling player automatically replaces a player in waitlist</li>
                 </ul>
-                <h4>6. Schedule & Location</h4>
+                <h4>7. Schedule & Location</h4>
                 <ul>
-                  <li>Tuesdays: 6–8 PM (1 court) · Sundays: 6–8 PM (3 courts)</li>
-                  <li>Location: SBC Surrey</li>
+                  <li>
+                    Tuesdays: 6–8 PM (1 court) · Sundays: 6–8 PM (3 courts) - Subject to change
+                    based on availability.
+                  </li>
+                  <li>Location: Surrey Badminton Club, 19025 52 Ave, Surrey, BC</li>
                 </ul>
-                <h4>7. Equipment</h4>
+                <h4>8. Equipment</h4>
                 <ul>
                   <li>Yonex Mavis 350 birdies · Track usage responsibly</li>
                 </ul>
-                <h4>8. Conduct</h4>
+                <h4>9. Conduct</h4>
                 <ul>
                   <li>Self-managed group · Be respectful · Keep games fun</li>
                 </ul>
@@ -935,17 +956,19 @@ export default function IndexPage() {
                     <div key={key} className="ip-group">
                       {isAllSlotsLocked ? (
                         <div className="ip-group-label ip-group-label-disabled">
-                          {first.date} <br /> {first.time}
+                          {first.date} <br /> {first.time} <br /> {first.numberOfCourts} Court(s)
                         </div>
                       ) : (
                         <div className="ip-group-label">
-                          {first.date} <br /> {first.time}
+                          {first.date} <br /> {first.time} <br /> {first.numberOfCourts} Court(s) -
+                          Max {first.players.length} per court
                         </div>
                       )}
                       {visibleSlots.map((slot, courtIdx) => (
                         <div key={slot._id} className="ip-court">
                           <div className="ip-court-title">
-                            Court {slot.courtNo > 0 ? slot.courtNo : courtIdx + 1}
+                            Court {slot.courtNo > 0 ? slot.courtNo : courtIdx + 1}: Max.{' '}
+                            {slot.players.length} Players
                           </div>
 
                           {slot.slotLocked && slot.slotAmountPublished && (
@@ -977,8 +1000,9 @@ export default function IndexPage() {
                           </div>
 
                           {/* Player rows */}
-                          {Array.from({ length: PLAYER_COUNT + WL_COUNT }, (_, i) =>
-                            renderPlayer(slot, i),
+                          {Array.from(
+                            { length: slot.players.length + slot.waitList.length },
+                            (_, i) => renderPlayer(slot, i),
                           )}
                         </div>
                       ))}
