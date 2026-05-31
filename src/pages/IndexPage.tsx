@@ -610,9 +610,9 @@ export default function IndexPage() {
         /* ── grid ── */
         .ip-grid-header, .ip-player-row {
           display: grid;
-          grid-template-columns: 48px 1fr 100px 80px 56px;
+          grid-template-columns: 40px 1fr 90px 70px 44px;
           align-items: center;
-          column-gap: 8px;
+          column-gap: 6px;
         }
 
         .ip-grid-header {
@@ -783,8 +783,8 @@ export default function IndexPage() {
 
         @media (max-width: 600px) {
             .ip-grid-header, .ip-player-row {
-                grid-template-columns: 36px 1fr 80px 52px 40px;
-                column-gap: 5px;
+                grid-template-columns: 32px 1fr 72px 44px 32px;
+                column-gap: 4px;
             }
             .ip-name {
               padding: 5px 7px;
