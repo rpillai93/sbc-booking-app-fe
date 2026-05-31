@@ -681,6 +681,7 @@ export default function IndexPage() {
           transition: opacity 0.15s;
           display: inline-block;
           width: 100%;
+           max-width: 110px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
