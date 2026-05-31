@@ -436,42 +436,6 @@ export default function AdminPage() {
     setEditAmtKey(null);
   }
 
-  function updateApplyRow(idx: number, value: string) {
-    setApplyModal((prev) => {
-      const enteredAmt = parseFloat(value);
-
-      // build new rows with the edited cell updated
-      const rows = prev.rows.map((r, i) => (i === idx ? { ...r, amount: value } : { ...r }));
-
-      // if the entered value is invalid or exceeds the total, just store it
-      // (the save button will be disabled by the validation below)
-      if (isNaN(enteredAmt) || enteredAmt < 0 || enteredAmt > prev.originalTotal) {
-        return { ...prev, rows };
-      }
-
-      const remaining = prev.originalTotal - enteredAmt;
-
-      // distribute remaining among all other eligible rows based on their split weight
-      const otherRows = rows.filter((r, i) => {
-        if (i === idx) return false;
-        if (r.isWaitList && !prev.includeWaitlist) return false;
-        return true;
-      });
-
-      const totalWeight = otherRows.reduce((sum, r) => sum + r.split / 100, 0);
-
-      const updatedRows = rows.map((r, i) => {
-        if (i === idx) return r; // keep the manually edited value
-        if (r.isWaitList && !prev.includeWaitlist) return { ...r, amount: '0' };
-        if (totalWeight === 0) return { ...r, amount: '0' };
-        const share = (remaining / totalWeight) * (r.split / 100);
-        return { ...r, amount: (Math.round(share * 100) / 100).toString() };
-      });
-
-      return { ...prev, rows: updatedRows };
-    });
-  }
-
   function handleSplitChange(idx: number, value: 100 | 75 | 50 | 25 | 0) {
     setApplyModal((prev) => {
       const rows = prev.rows.map((r, i) => (i === idx ? { ...r, split: value } : { ...r }));
@@ -1580,16 +1544,7 @@ export default function AdminPage() {
                             alignItems: 'center',
                           }}
                         >
-                          <span className="ap-apply-amt-symbol">$</span>
-                          <input
-                            className="ap-apply-amt-input"
-                            type="number"
-                            min={0}
-                            step={0.01}
-                            value={row.amount}
-                            disabled={isWlDisabled}
-                            onChange={(e) => updateApplyRow(idx, e.target.value)}
-                          />
+                          <div className="ap-apply-name-main">$ {row.amount}</div>
                         </div>
                       </React.Fragment>
                     );

@@ -648,7 +648,7 @@ export default function IndexPage() {
         }
 
         .ip-col-label { font-size: 12px; color: #9ca3af; text-align: center; }
-        .ip-col-name { }
+        .ip-col-name {min-width: 0;}
         .ip-col-ownerName { font-size: 10px; color: #9ca3af; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .ip-col-ts { display: flex; flex-direction: column; align-items: center; gap: 2px; text-align: center; }
         .ip-col-ts-name { font-size: 11px; font-weight: 600; color: #d0d0d0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
@@ -681,6 +681,9 @@ export default function IndexPage() {
           transition: opacity 0.15s;
           display: inline-block;
           width: 100%;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .ip-name:hover { opacity: 0.8; }
         .ip-name.available { background: #dcfce7; color: #166534; }
