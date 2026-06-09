@@ -2057,104 +2057,146 @@ export default function AdminPage() {
 
               {/* Archived */}
               {(() => {
-                const archived = Object.values(groupedSlots)
+                const allArchived = Object.values(groupedSlots)
                   .flat()
-                  .filter((s) => s.slotArchived)
-                  .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-                if (archived.length === 0) return null;
+                  .filter((s) => s.slotArchived);
+
+                if (allArchived.length === 0) return null;
+
+                // Group archived slots by date__time, same as active bookings
+                const archivedGroups = new Map<string, Slot[]>();
+                for (const slot of allArchived) {
+                  const key = `${slot.date}__${slot.time}`;
+                  if (!archivedGroups.has(key)) archivedGroups.set(key, []);
+                  archivedGroups.get(key)!.push(slot);
+                }
+
+                // Sort groups by date ascending
+                const sortedGroups = Array.from(archivedGroups.entries()).sort(([, a], [, b]) => {
+                  const da = new Date(`${a[0].date} ${a[0].time.split('–')[0].trim()}`);
+                  const db = new Date(`${b[0].date} ${b[0].time.split('–')[0].trim()}`);
+                  return da.getTime() - db.getTime();
+                });
+
                 return (
                   <>
                     <p className="ap-section-title">Archived Bookings</p>
-                    {archived.map((slot, ci) => {
-                      const isExpanded = expandedArchiveIds.has(slot._id);
-                      const slotTotal = [...slot.players, ...slot.waitList].reduce(
-                        (s, p) => s + (p.playerAmt ?? 0),
-                        0,
-                      );
+                    {sortedGroups.map(([groupKey, slots]) => {
+                      const first = slots[0];
+                      const isExpanded = expandedArchiveIds.has(groupKey);
+
+                      // One combined total across all courts in the group
+                      const displayTotal = Math.round((first.slotTotalAmount * 100) / 100);
+
                       return (
-                        <div key={slot._id} className="ap-archive-card">
+                        <div key={groupKey} className="ap-archive-card">
                           <div
                             className="ap-archive-summary"
-                            onClick={() => toggleArchiveExpand(slot._id)}
+                            onClick={() => toggleArchiveExpand(groupKey)}
                           >
                             <div className="ap-archive-meta">
-                              <span className="ap-archive-date">{slot.date}</span>
-                              <span className="ap-archive-time">{slot.time}</span>
+                              <span className="ap-archive-date">{first.date}</span>
+                              <span className="ap-archive-time">{first.time}</span>
                               <span className="ap-archive-court">
-                                Court {slot.courtNo > 0 ? slot.courtNo : ci + 1}
+                                {slots.length} court{slots.length > 1 ? 's' : ''}
                               </span>
                             </div>
                             <span className={`ap-archive-chevron${isExpanded ? ' open' : ''}`}>
                               ▼
                             </span>
                           </div>
+
                           {isExpanded && (
                             <div className="ap-archive-body">
+                              {/* Single total for the whole group */}
                               <div className="ap-group-amount-bar" style={{ marginTop: '4px' }}>
                                 <span className="ap-amount-label">Total Amount:</span>
                                 <span className="ap-amount-value">
-                                  {slotTotal > 0 ? `$${fmt(slotTotal)}` : '—'}
+                                  {displayTotal > 0 ? `$${fmt(displayTotal)}` : '—'}
                                 </span>
                               </div>
-                              <div className="ap-archive-players">
-                                {slot.players.map((p: Player, i: number) => (
-                                  <span
-                                    key={i}
-                                    className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
+
+                              {/* One sub-card per court */}
+                              {slots.map((slot, ci) => (
+                                <div key={slot._id} style={{ marginTop: '10px' }}>
+                                  <div
                                     style={{
-                                      display: 'inline-flex',
+                                      display: 'flex',
                                       alignItems: 'center',
-                                      gap: '5px',
+                                      justifyContent: 'space-between',
+                                      marginBottom: '6px',
                                     }}
                                   >
-                                    {p.name || `P${i + 1} open`}
-                                    {p.name && (
-                                      <span
-                                        className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
-                                      >
-                                        {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
-                                      </span>
-                                    )}
-                                  </span>
-                                ))}
-                                {slot.waitList
-                                  .filter((p: Player) => p.name)
-                                  .map((p: Player, i: number) => (
-                                    <span
-                                      key={i}
-                                      className="ap-player-chip wl"
+                                    <div
                                       style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '5px',
+                                        fontSize: '12px',
+                                        fontFamily: "'Syne', sans-serif",
+                                        fontWeight: 700,
+                                        color: '#555',
                                       }}
                                     >
-                                      WL{i + 1}: {p.name}
-                                      <span
-                                        className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                      Court {slot.courtNo > 0 ? slot.courtNo : ci + 1}
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <button
+                                        title="Unarchive this court booking back to Manage Bookings."
+                                        className="ap-action-btn success"
+                                        onClick={() => handleArchive(slot)}
                                       >
-                                        {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                        📤 Unarchive
+                                      </button>
+                                      <button
+                                        className="ap-action-btn danger"
+                                        onClick={() => handleDelete(slot)}
+                                      >
+                                        🗑 Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                  <div className="ap-archive-players">
+                                    {slot.players.map((p: Player, i: number) => (
+                                      <span
+                                        key={i}
+                                        className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '5px',
+                                        }}
+                                      >
+                                        {p.name || `P${i + 1} open`}
+                                        {p.name && (
+                                          <span
+                                            className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                          >
+                                            {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                          </span>
+                                        )}
                                       </span>
-                                    </span>
-                                  ))}
-                              </div>
-                              <div className="ap-archive-actions">
-                                <button
-                                  title={
-                                    'Unarchive this booking so it can be actioned upon again. It will be moved to the "Manage Bookings" section.'
-                                  }
-                                  className="ap-action-btn success"
-                                  onClick={() => handleArchive(slot)}
-                                >
-                                  📤 Unarchive
-                                </button>
-                                <button
-                                  className="ap-action-btn danger"
-                                  onClick={() => handleDelete(slot)}
-                                >
-                                  🗑 Delete
-                                </button>
-                              </div>
+                                    ))}
+                                    {slot.waitList
+                                      .filter((p: Player) => p.name)
+                                      .map((p: Player, i: number) => (
+                                        <span
+                                          key={i}
+                                          className="ap-player-chip wl"
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '5px',
+                                          }}
+                                        >
+                                          WL{i + 1}: {p.name}
+                                          <span
+                                            className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
+                                          >
+                                            {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
+                                          </span>
+                                        </span>
+                                      ))}
+                                  </div>
+                                </div>
+                              ))}
                             </div>
                           )}
                         </div>
