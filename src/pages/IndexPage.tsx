@@ -36,6 +36,7 @@ function emptyPlayer(): Player {
     timeStamp: '',
     payment: false,
     playerAmt: 0,
+    playerLocked: false,
   };
 }
 
@@ -254,32 +255,36 @@ export default function IndexPage() {
     const blank = isBlank(p);
     const key = `${slot._id}_${globalIdx}`;
     const isEditingThis = editingKey === key;
+
     const locked = slot.slotLocked;
+    const amountPublished = slot.slotAmountPublished;
+
+    // Filled slots: frozen as soon as the slot is locked.
+    // Empty slots: still editable when locked but unpublished; frozen only once amount is published.
+    const rowFrozen = blank ? locked && amountPublished : locked;
+
     const paymentCheckDisabled =
-      blank ||
-      !locked ||
-      p.playerAmt == null ||
-      p.playerAmt < 0 ||
-      (p.playerAmt == 0 && slot.slotAmountPublished) ||
-      p.payment;
+      blank || !locked || p.playerAmt == null || p.playerAmt <= 0 || !amountPublished || p.payment;
 
     let nameClass = 'ip-name';
     if (!isWl) nameClass += blank ? ' available' : ' filled';
     else nameClass += blank ? ' wl-empty' : ' wl-filled';
+
     const playerAmtToShow =
-      !blank && slot.slotAmountPublished && slot.slotLocked
+      !blank && amountPublished && locked
         ? p.playerAmt > 0
           ? `$${p.playerAmt}`
           : `-$${Math.abs(p.playerAmt)}`
         : '';
+
     return (
-      <div key={key} className={`ip-player-row${locked ? ' ip-locked' : ''}`}>
+      <div key={key} className={`ip-player-row${rowFrozen ? ' ip-locked' : ''}`}>
         {/* label */}
         <div className="ip-col-label">{label}</div>
 
         {/* name / input */}
         <div className="ip-col-name">
-          {isEditingThis && !locked ? (
+          {isEditingThis && !rowFrozen ? (
             <input
               className="ip-inline-input"
               autoFocus
@@ -303,16 +308,16 @@ export default function IndexPage() {
             <div
               className={nameClass}
               onClick={() => {
-                if (!locked && !editingKey) startEdit(slot, globalIdx);
+                if (!rowFrozen && !editingKey) startEdit(slot, globalIdx);
               }}
-              style={{ cursor: locked ? 'default' : 'pointer' }}
+              style={{ cursor: rowFrozen ? 'default' : 'pointer' }}
             >
               {blank ? (isWl ? 'Waitlist' : 'Available') : p.name}
             </div>
           )}
         </div>
 
-        {/* booked by + timestamp — combined column */}
+        {/* booked by + timestamp */}
         <div className="ip-col-ts">
           {blank ? (
             ''
@@ -328,17 +333,16 @@ export default function IndexPage() {
           )}
         </div>
 
-        {/* amount + payment checkbox stacked */}
+        {/* amount + payment checkbox */}
         <div className="ip-col-pay">
           <div className="ip-pay-stack">
-            {/* amount — only show when a real amount exists */}
             <span
               className="ip-player-amt"
               style={{
                 color: p.playerAmt > 0 && !p.payment ? '#f59e0b' : '#22c55e',
               }}
             >
-              {p.payment || p.playerAmt < 0 || (p.playerAmt == 0 && slot.slotAmountPublished) ? (
+              {p.payment || p.playerAmt < 0 || (p.playerAmt == 0 && amountPublished) ? (
                 <s>{playerAmtToShow}</s>
               ) : (
                 playerAmtToShow
@@ -346,9 +350,7 @@ export default function IndexPage() {
             </span>
             <input
               type="checkbox"
-              checked={
-                p.payment || p.playerAmt < 0 || (p.playerAmt == 0 && slot.slotAmountPublished)
-              }
+              checked={p.payment || p.playerAmt < 0 || (p.playerAmt == 0 && amountPublished)}
               disabled={paymentCheckDisabled}
               style={{
                 cursor: paymentCheckDisabled ? 'not-allowed' : 'pointer',
@@ -380,7 +382,7 @@ export default function IndexPage() {
           {!blank && (
             <button
               className="ip-remove-btn"
-              disabled={locked}
+              disabled={rowFrozen}
               onClick={() => {
                 const suffix =
                   globalIdx < slot.players.length

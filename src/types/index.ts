@@ -7,6 +7,7 @@ export interface Player {
   timeStamp: string;
   payment: boolean;
   playerAmt: number;
+  playerLocked: boolean;
 }
 
 export interface Slot {
