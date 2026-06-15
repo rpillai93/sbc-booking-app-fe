@@ -5,11 +5,11 @@ import {
   getSlots,
   createSlot,
   deleteSlot,
+  resizeSlot,
   lockSlot,
   hideSlot,
   archiveSlot,
   updateAmount,
-  updateCourtNo,
   getUsers,
   approveUser,
   deleteUser,
@@ -145,6 +145,8 @@ export default function AdminPage() {
   const [createFrom, setCreateFrom] = useState('6:00 PM');
   const [createTo, setCreateTo] = useState('8:00 PM');
   const [createCourts, setCreateCourts] = useState(1);
+  const [createNumPlayers, setCreateNumPlayers] = useState(4);
+  const [createNumWaitlistPlayers, setCreateNumWaitlistPlayers] = useState(1);
   const [creating, setCreating] = useState(false);
 
   const [editAmtKey, setEditAmtKey] = useState<string | null>(null);
@@ -155,9 +157,65 @@ export default function AdminPage() {
   const [totalInputValue, setTotalInputValue] = useState('');
 
   const [expandedArchiveIds, setExpandedArchiveIds] = useState<Set<string>>(new Set());
+  const [settleHovered, setSettleHovered] = useState<string | null>(null);
 
-  const [editingCourtId, setEditingCourtId] = useState<string | null>(null);
-  const [editingCourtValue, setEditingCourtValue] = useState('');
+  // ── resize modal state ────────────────────────────────────────────────────
+  const [resizeModal, setResizeModal] = useState<{
+    open: boolean;
+    slot: Slot | null;
+    removeCourts: string;
+    removePlayers: string;
+    removeWaitlist: string;
+  }>({ open: false, slot: null, removeCourts: '0', removePlayers: '0', removeWaitlist: '0' });
+
+  function openResizeModal(slot: Slot) {
+    setResizeModal({
+      open: true,
+      slot,
+      removeCourts: '0',
+      removePlayers: '0',
+      removeWaitlist: '0',
+    });
+  }
+  function closeResizeModal() {
+    setResizeModal({
+      open: false,
+      slot: null,
+      removeCourts: '0',
+      removePlayers: '0',
+      removeWaitlist: '0',
+    });
+  }
+
+  async function handleResize() {
+    if (!resizeModal.slot) return;
+    const courts = parseInt(resizeModal.removeCourts) || 0;
+    const players = parseInt(resizeModal.removePlayers) || 0;
+    const waitlist = parseInt(resizeModal.removeWaitlist) || 0;
+    if (courts === 0 && players === 0 && waitlist === 0) {
+      showOkayMsg('No changes selected.');
+      return;
+    }
+    // const slotId = resizeModal.slot._id;
+    closeResizeModal(); // ← close FIRST, then open the confirm modal
+    confirm(
+      `Remove <b>${courts}</b> court(s), <b>${players}</b> player slot(s), and <b>${waitlist}</b> waitlist slot(s) from this booking?`,
+      async () => {
+        closeResizeModal();
+        await withLoader('Updating...', () =>
+          resizeSlot(resizeModal.slot!._id, {
+            removeCourts: courts,
+            removePlayers: players,
+            removeWaitlist: waitlist,
+          }).then(),
+        );
+      },
+      undefined,
+      false,
+      'Confirm',
+      '#f59e0b',
+    );
+  }
 
   // ── users state ──────────────────────────────────────────────────────────
   const [users, setUsers] = useState<User[]>([]);
@@ -165,6 +223,46 @@ export default function AdminPage() {
   const [userSortKey, setUserSortKey] = useState<UserSortKey>('name');
   const [userSortDir, setUserSortDir] = useState<SortDir>('asc');
   const [selfUser, setSelfUser] = useState<User | null>(null);
+
+  // ── okay helper (wrapped by confirm helper)──────────────────────────────
+  function showOkayMsg(
+    message: string,
+    onConfirm?: () => void,
+    onCancel?: () => void,
+    hideCancel?: boolean,
+    confirmLabel = 'Okay',
+    confirmColor = '#dc2626',
+  ) {
+    setModal({
+      open: true,
+      message,
+      onConfirm: onConfirm ?? null,
+      onCancel: onCancel ?? null,
+      hideCancel: hideCancel ?? true,
+      confirmLabel,
+      confirmColor,
+    });
+  }
+
+  // ── confirm helper ────────────────────────────────────────────────────────
+  function confirm(
+    message: string,
+    onConfirm?: () => void,
+    onCancel?: () => void,
+    hideCancel?: boolean,
+    confirmLabel = 'Confirm',
+    confirmColor = '#dc2626',
+  ) {
+    setModal({
+      open: true,
+      message,
+      onConfirm: onConfirm ?? null,
+      onCancel: onCancel ?? null,
+      hideCancel: hideCancel ?? false,
+      confirmLabel,
+      confirmColor,
+    });
+  }
 
   // ── fetch slots ──────────────────────────────────────────────────────────
   const fetchSlots = useCallback(async (quiet = false) => {
@@ -227,46 +325,6 @@ export default function AdminPage() {
     return () => document.removeEventListener('click', handleGlobalClick);
   }, []);
 
-  // ── okay helper (wrapped by confirm helper)──────────────────────────────
-  function showOkayMsg(
-    message: string,
-    onConfirm?: () => void,
-    onCancel?: () => void,
-    hideCancel?: boolean,
-    confirmLabel = 'Okay',
-    confirmColor = '#dc2626',
-  ) {
-    setModal({
-      open: true,
-      message,
-      onConfirm: onConfirm ?? null,
-      onCancel: onCancel ?? null,
-      hideCancel: hideCancel ?? true,
-      confirmLabel,
-      confirmColor,
-    });
-  }
-
-  // ── confirm helper ────────────────────────────────────────────────────────
-  function confirm(
-    message: string,
-    onConfirm?: () => void,
-    onCancel?: () => void,
-    hideCancel?: boolean,
-    confirmLabel = 'Confirm',
-    confirmColor = '#dc2626',
-  ) {
-    setModal({
-      open: true,
-      message,
-      onConfirm: onConfirm ?? null,
-      onCancel: onCancel ?? null,
-      hideCancel: hideCancel ?? false,
-      confirmLabel,
-      confirmColor,
-    });
-  }
-
   async function withLoader(msg: string, fn: () => Promise<void>) {
     setLoaderMsg(msg);
     setLoading(true);
@@ -311,10 +369,14 @@ export default function AdminPage() {
             date: createDate,
             time: `${createFrom}–${createTo}`,
             courts: createCourts,
+            numPlayers: createNumPlayers,
+            numWaitlist: createNumWaitlistPlayers,
           });
           await fetchSlots(true);
           setCreateDate('');
           setCreateCourts(1);
+          setCreateNumPlayers(4);
+          setCreateNumWaitlistPlayers(1);
           confirm(`Booking created successfully!`, undefined, undefined, true, 'Okay', '#22c55e');
         } catch (err) {
           const e = err as AxiosError<{ message: string }>;
@@ -556,24 +618,6 @@ export default function AdminPage() {
     fetchSelf(); //Ensure the current user's balance payment is updated after the payment is posted to the server
   }
 
-  function handleCourtNoSave(slot: Slot, newValue: string) {
-    const num = parseInt(newValue, 10);
-    if (isNaN(num) || num < 1 || num > 9) {
-      showOkayMsg('Court number must be between <b>1</b> and <b>9</b>.');
-      setEditingCourtId(null);
-      return;
-    }
-    setEditingCourtId(null);
-    confirm(
-      `Save Court no. to <b>${num}</b>?`,
-      () => withLoader('Saving...', () => updateCourtNo(slot._id, { courtNo: num }).then()),
-      undefined,
-      false,
-      'Save',
-      '#22c55e',
-    );
-  }
-
   // ── user actions ──────────────────────────────────────────────────────────
   function handleApproveUser(u: User) {
     confirm(
@@ -710,7 +754,6 @@ export default function AdminPage() {
     balance: number;
     value: string;
   }>({ open: false, userId: '', name: '', balance: 0, value: '' });
-  const [settleHovered, setSettleHovered] = useState<string | null>(null);
   const [settleSaving, setSettleSaving] = useState(false);
 
   function openSettleModal(u: User) {
@@ -847,7 +890,7 @@ export default function AdminPage() {
         .ap-slot-card.hidden { opacity: 0.5; }
 
         .ap-slot-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
-        .ap-slot-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; color: #f0f0f0; display: flex; align-items: center; gap: 8px; }
+        .ap-slot-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; color: #f0f0f0; display: flex; align-items: center; gap: 8px; margin: 12px 1px }
         .ap-court-no { cursor: pointer; border-bottom: 1px dashed #444; transition: border-color 0.2s; }
         .ap-court-no:hover { border-color: #22c55e; color: #22c55e; }
         .ap-court-no-input { width: 36px; padding: 1px 4px; background: #1e1e1e; border: 1px solid #22c55e; border-radius: 4px; color: #22c55e; font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 700; outline: none; text-align: center; margin: 0; }
@@ -1266,6 +1309,23 @@ export default function AdminPage() {
           margin: 0;
         }
         .usr-comment-cancel:hover { background: #2e2e2e; color: #ccc; }
+
+        /* ── resize modal ── */
+        .ap-resize-modal { background: #161616; border: 1px solid #2a2a2a; border-radius: 16px; padding: 20px; width: 100%; max-width: 380px; box-shadow: 0 30px 80px rgba(0,0,0,0.7); display: flex; flex-direction: column; gap: 14px; }
+        .ap-resize-modal-title { font-family: 'Syne', sans-serif; font-size: 15px; font-weight: 800; color: #f0f0f0; }
+        .ap-resize-modal-subtitle { font-size: 12px; color: #555; margin-top: 2px; }
+        .ap-resize-field { display: flex; flex-direction: column; gap: 6px; }
+        .ap-resize-field label { font-size: 11px; font-weight: 600; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .ap-resize-field input { padding: 10px 12px; background: #1e1e1e; border: 1px solid #2e2e2e; border-radius: 8px; color: #f0f0f0; font-family: 'DM Sans', sans-serif; font-size: 13px; outline: none; transition: border-color 0.2s; width: 100%; margin: 0; }
+        .ap-resize-field input:focus { border-color: #f59e0b; }
+        .ap-resize-field .ap-resize-hint { font-size: 10px; color: #f59e0b; }
+        .ap-resize-footer { display: flex; gap: 10px; margin-top: 4px; }
+        .ap-resize-confirm { flex: 1; padding: 10px; background: #f59e0b; color: #000; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0; transition: opacity 0.15s; }
+        .ap-resize-confirm:hover { opacity: 0.85; }
+        .ap-resize-confirm:disabled { opacity: 0.35; cursor: not-allowed; }
+        .ap-resize-cancel { flex: 1; padding: 10px; background: #2a2a2a; color: #aaa; border: none; border-radius: 8px; font-family: 'Syne', sans-serif; font-size: 14px; font-weight: 700; cursor: pointer; margin: 0; }
+        .ap-resize-btn { padding: 7px 12px; border-radius: 7px; border: 1px solid #f59e0b44; background: #f59e0b11; color: #f59e0b; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'DM Sans', sans-serif; transition: all 0.2s; width: auto; margin: 0; white-space: nowrap; }
+        .ap-resize-btn:hover { background: #f59e0b22; border-color: #f59e0b88; }
       `}</style>
 
       {/* Loader */}
@@ -1596,6 +1656,94 @@ export default function AdminPage() {
             </div>
           );
         })()}
+      {/* Resize modal */}
+      {resizeModal.open &&
+        resizeModal.slot &&
+        (() => {
+          const slot = resizeModal.slot;
+          const maxCourts = slot.numberOfCourts;
+          const availablePlayers = slot.players.filter(
+            (p) => p.name == '' && p.ownerIdentifier == '',
+          ).length;
+          const maxPlayers = slot.players.length;
+          const availableWaitlist = slot.waitList.filter(
+            (p) => p.name == '' && p.ownerIdentifier == '',
+          ).length;
+          const maxWaitlist = slot.waitList.length;
+          const nothingChanged =
+            (parseInt(resizeModal.removeCourts) || 0) === 0 &&
+            (parseInt(resizeModal.removePlayers) || 0) === 0 &&
+            (parseInt(resizeModal.removeWaitlist) || 0) === 0;
+          return (
+            <div className="ap-modal-backdrop">
+              <div className="ap-resize-modal">
+                <div>
+                  <div className="ap-resize-modal-title">Remove Courts / Players</div>
+                  <div className="ap-resize-modal-subtitle">
+                    {slot.date} · {slot.time}
+                  </div>
+                </div>
+                <div className="ap-resize-field">
+                  <label>Remove No. of Courts</label>
+                  <span className="ap-resize-hint">
+                    Currently booked: {maxCourts} Court(s), minimum 1 court should remain.
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={maxCourts}
+                    value={resizeModal.removeCourts}
+                    onChange={(e) =>
+                      setResizeModal((p) => ({ ...p, removeCourts: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="ap-resize-field">
+                  <label>Remove No. of Available Players</label>
+                  <span className="ap-resize-hint">
+                    Max. {availablePlayers} available players can be removed currently.
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={maxPlayers}
+                    value={resizeModal.removePlayers}
+                    onChange={(e) =>
+                      setResizeModal((p) => ({ ...p, removePlayers: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="ap-resize-field">
+                  <label>Remove No. of Available Waitlist Players</label>
+                  <span className="ap-resize-hint">
+                    Max. {availableWaitlist} available waitlist players can be removed currently.
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={maxWaitlist}
+                    value={resizeModal.removeWaitlist}
+                    onChange={(e) =>
+                      setResizeModal((p) => ({ ...p, removeWaitlist: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="ap-resize-footer">
+                  <button
+                    className="ap-resize-confirm"
+                    disabled={nothingChanged}
+                    onClick={handleResize}
+                  >
+                    Apply
+                  </button>
+                  <button className="ap-resize-cancel" onClick={closeResizeModal}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       {/* Comment edit modal */}
       {commentModal.open && (
         <div className="usr-comment-backdrop" onClick={closeCommentModal}>
@@ -1757,21 +1905,37 @@ export default function AdminPage() {
                       >
                         {[
                           '7:00 AM',
+                          '7:30 AM',
                           '8:00 AM',
+                          '8:30 AM',
                           '9:00 AM',
+                          '9:30 AM',
                           '10:00 AM',
+                          '10:30 AM',
                           '11:00 AM',
+                          '11:30 AM',
                           '12:00 PM',
+                          '12:30 PM',
                           '1:00 PM',
+                          '1:30 PM',
                           '2:00 PM',
+                          '2:30 PM',
                           '3:00 PM',
+                          '3:30 PM',
                           '4:00 PM',
+                          '4:30 PM',
                           '5:00 PM',
+                          '5:30 PM',
                           '6:00 PM',
+                          '6:30 PM',
                           '7:00 PM',
+                          '7:30 PM',
                           '8:00 PM',
+                          '8:30 PM',
                           '9:00 PM',
+                          '9:30 PM',
                           '10:00 PM',
+                          '10:30 PM',
                         ].map((t) => (
                           <option key={t} value={t}>
                             {t}
@@ -1787,21 +1951,37 @@ export default function AdminPage() {
                         onChange={(e) => setCreateTo(e.target.value)}
                       >
                         {[
+                          '7:30 AM',
                           '8:00 AM',
+                          '8:30 AM',
                           '9:00 AM',
+                          '9:30 AM',
                           '10:00 AM',
+                          '10:30 AM',
                           '11:00 AM',
+                          '11:30 AM',
                           '12:00 PM',
+                          '12:30 PM',
                           '1:00 PM',
+                          '1:30 PM',
                           '2:00 PM',
+                          '2:30 PM',
                           '3:00 PM',
+                          '3:30 PM',
                           '4:00 PM',
+                          '4:30 PM',
                           '5:00 PM',
+                          '5:30 PM',
                           '6:00 PM',
+                          '6:30 PM',
                           '7:00 PM',
+                          '7:30 PM',
                           '8:00 PM',
+                          '8:30 PM',
                           '9:00 PM',
+                          '9:30 PM',
                           '10:00 PM',
+                          '10:30 PM',
                           '11:00 PM',
                         ].map((t) => (
                           <option key={t} value={t}>
@@ -1811,7 +1991,27 @@ export default function AdminPage() {
                       </select>
                     </div>
                     <div className="ap-form-field">
-                      <label>Courts</label>
+                      <label>Total No. of Players</label>
+                      <input
+                        type="number"
+                        className="ap-input"
+                        min={4}
+                        value={createNumPlayers}
+                        onChange={(e) => setCreateNumPlayers(Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="ap-form-field">
+                      <label>Total No. of Waitlist Players</label>
+                      <input
+                        type="number"
+                        className="ap-input"
+                        min={1}
+                        value={createNumWaitlistPlayers}
+                        onChange={(e) => setCreateNumWaitlistPlayers(Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="ap-form-field">
+                      <label>No. of Courts Booked</label>
                       <input
                         type="number"
                         className="ap-input"
@@ -1862,106 +2062,75 @@ export default function AdminPage() {
                       <div key={key} className="ap-group">
                         <div className="ap-group-label">
                           📅 {first.date} · {first.time}
-                          <span style={{ color: '#444', fontSize: '12px' }}>
-                            ({activeSlots.length} court{activeSlots.length > 1 ? 's' : ''})
-                          </span>
                         </div>
-                        <div className="ap-group-amount-bar">
-                          <span className="ap-amount-label">Total Amount (inc. birdies+tax):</span>
-                          {isEditingAmt ? (
-                            <>
-                              <span style={{ color: '#555', fontSize: '13px' }}>$</span>
-                              <input
-                                autoFocus
-                                className="ap-amount-input"
-                                type="number"
-                                min={0}
-                                step={0.01}
-                                value={editAmtValue}
-                                onChange={(e) => setEditAmtValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && parseFloat(editAmtValue) > 0)
-                                    openApplyModal(groupKey, slots, parseFloat(editAmtValue));
-                                  if (e.key === 'Escape') setEditAmtKey(null);
-                                }}
-                              />
-                              <button
-                                className="ap-amount-save"
-                                disabled={!editAmtValue || parseFloat(editAmtValue) <= 0}
-                                onClick={() =>
-                                  openApplyModal(groupKey, slots, parseFloat(editAmtValue))
-                                }
-                              >
-                                Save
-                              </button>
-                              <button
-                                className="ap-amount-edit-btn"
-                                onClick={() => setEditAmtKey(null)}
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <>
-                              <span className="ap-amount-value">
-                                {displayTotal > 0 ? `$${fmt(displayTotal)}` : '—'}
-                              </span>
-                              <button
-                                className="ap-amount-edit-btn"
-                                onClick={() => {
-                                  setEditAmtKey(groupKey);
-                                  setEditAmtValue('');
-                                }}
-                              >
-                                ✏️ Edit
-                              </button>
-                            </>
-                          )}
-                        </div>
-                        {activeSlots.map((slot, ci) => (
+                        {activeSlots.map((slot) => (
                           <div
                             key={slot._id}
                             className={`ap-slot-card${slot.slotLocked ? ' locked' : ''}${slot.slotHidden ? ' hidden' : ''}`}
                           >
+                            <span className="ap-amount-label">
+                              Total Amount (inc. birdies+tax):
+                            </span>
+                            {isEditingAmt ? (
+                              <>
+                                <span style={{ color: '#555', fontSize: '13px' }}>$</span>
+                                <input
+                                  autoFocus
+                                  className="ap-amount-input"
+                                  type="number"
+                                  min={0}
+                                  step={0.01}
+                                  value={editAmtValue}
+                                  onChange={(e) => setEditAmtValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && parseFloat(editAmtValue) > 0)
+                                      openApplyModal(groupKey, slots, parseFloat(editAmtValue));
+                                    if (e.key === 'Escape') setEditAmtKey(null);
+                                  }}
+                                />
+                                <button
+                                  className="ap-amount-save"
+                                  disabled={!editAmtValue || parseFloat(editAmtValue) <= 0}
+                                  onClick={() =>
+                                    openApplyModal(groupKey, slots, parseFloat(editAmtValue))
+                                  }
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  className="ap-amount-edit-btn"
+                                  onClick={() => setEditAmtKey(null)}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <span className="ap-amount-value">
+                                  {displayTotal > 0 ? `$${fmt(displayTotal)}` : '—'}
+                                </span>
+                                <button
+                                  className="ap-amount-edit-btn"
+                                  onClick={() => {
+                                    setEditAmtKey(groupKey);
+                                    setEditAmtValue('');
+                                  }}
+                                >
+                                  ✏️ Edit
+                                </button>
+                              </>
+                            )}
                             <div className="ap-slot-header">
                               <div className="ap-slot-title">
-                                Court{' '}
-                                {editingCourtId === slot._id ? (
-                                  <input
-                                    autoFocus
-                                    className="ap-court-no-input"
-                                    type="number"
-                                    min={1}
-                                    max={9}
-                                    value={editingCourtValue}
-                                    onChange={(e) => setEditingCourtValue(e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter')
-                                        handleCourtNoSave(slot, editingCourtValue);
-                                      if (e.key === 'Escape') setEditingCourtId(null);
-                                    }}
-                                    onBlur={() => {
-                                      if (editingCourtValue !== '')
-                                        handleCourtNoSave(slot, editingCourtValue);
-                                      else setEditingCourtId(null);
-                                    }}
-                                  />
-                                ) : (
-                                  <span
-                                    className="ap-court-no"
-                                    title="Click to edit court number"
-                                    onClick={() => {
-                                      setEditingCourtId(slot._id);
-                                      setEditingCourtValue(
-                                        String(slot.courtNo > 0 ? slot.courtNo : ci + 1),
-                                      );
-                                    }}
-                                  >
-                                    {slot.courtNo > 0 ? slot.courtNo : ci + 1}
-                                  </span>
-                                )}
+                                {slot.numberOfCourts} Court(s)
                                 {slot.slotLocked && <span className="ap-tag locked">LOCKED</span>}
                                 {slot.slotHidden && <span className="ap-tag hidden">HIDDEN</span>}
+                                <button
+                                  className="ap-resize-btn"
+                                  onClick={() => openResizeModal(slot)}
+                                >
+                                  ➖ Remove Courts / Players
+                                </button>
                               </div>
                               <div className="ap-slot-actions">
                                 <button
@@ -2027,26 +2196,26 @@ export default function AdminPage() {
                                   )}
                                 </span>
                               ))}
-                              {slot.waitList
-                                .filter((p: Player) => p.name)
-                                .map((p: Player, i: number) => (
-                                  <span
-                                    key={i}
-                                    className="ap-player-chip wl"
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '5px',
-                                    }}
-                                  >
-                                    WL{i + 1}: {p.name}
+                              {slot.waitList.map((p: Player, i: number) => (
+                                <span
+                                  key={i}
+                                  className={`ap-player-chip ${p.name ? 'filled' : 'empty'}`}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                  }}
+                                >
+                                  {p.name || `WL${i + 1} open`}
+                                  {p.name && (
                                     <span
                                       className={`ap-paid-coin ${p.payment ? 'paid' : 'unpaid'}`}
                                     >
                                       {p.playerAmt > 0 ? `$${fmt(p.playerAmt)}` : '$'}
                                     </span>
-                                  </span>
-                                ))}
+                                  )}
+                                </span>
+                              ))}
                             </div>
                           </div>
                         ))}

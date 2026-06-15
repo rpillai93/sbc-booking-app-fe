@@ -31,11 +31,21 @@ export const resetByKey = (data: ResetByKeyPayload) =>
 
 export const getSlots = () => axios.get<SlotsResponse>(`${BASE}/slots`, { headers: getHeaders() });
 
-export const createSlot = (data: { date: string; time: string; courts: number }) =>
-  axios.post(`${BASE}/slots`, data, { headers: getHeaders() });
+export const createSlot = (data: {
+  date: string;
+  time: string;
+  courts: number;
+  numPlayers: number;
+  numWaitlist: number;
+}) => axios.post(`${BASE}/slots`, data, { headers: getHeaders() });
 
 export const deleteSlot = (id: string) =>
   axios.delete(`${BASE}/slots/${id}`, { headers: getHeaders() });
+
+export const resizeSlot = (
+  id: string,
+  data: { removeCourts: number; removePlayers: number; removeWaitlist: number },
+) => axios.patch(`${BASE}/slots/${id}/resize`, data, { headers: getHeaders() });
 
 export const updatePlayer = (
   id: string,

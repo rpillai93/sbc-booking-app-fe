@@ -959,25 +959,24 @@ export default function IndexPage() {
                 .map(([key, slots]) => {
                   const visibleSlots = slots.filter((s) => !s.slotHidden);
                   if (visibleSlots.length === 0) return null;
-                  const isAllSlotsLocked = slots.findIndex((s) => !s.slotLocked) == -1;
+
+                  const isAllSlotsLocked = slots.every((s) => s.slotLocked);
                   const first = slots[0];
                   return (
                     <div key={key} className="ip-group">
                       {isAllSlotsLocked ? (
                         <div className="ip-group-label ip-group-label-disabled">
-                          {first.date} <br /> {first.time} <br /> {first.numberOfCourts} Court(s)
+                          {first.date} <br /> {first.time} <br />
                         </div>
                       ) : (
                         <div className="ip-group-label">
-                          {first.date} <br /> {first.time} <br /> {first.numberOfCourts} Court(s) -
-                          Max {first.players.length} per court
+                          {first.date} <br /> {first.time} <br />
                         </div>
                       )}
-                      {visibleSlots.map((slot, courtIdx) => (
+                      {visibleSlots.map((slot) => (
                         <div key={slot._id} className="ip-court">
                           <div className="ip-court-title">
-                            Court {slot.courtNo > 0 ? slot.courtNo : courtIdx + 1}: Max.{' '}
-                            {slot.players.length} Players
+                            {slot.numberOfCourts} Court(s) : Max. {slot.players.length} Players
                           </div>
 
                           {slot.slotLocked && slot.slotAmountPublished && (
