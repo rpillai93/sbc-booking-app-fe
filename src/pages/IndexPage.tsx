@@ -226,8 +226,8 @@ export default function IndexPage() {
     setEditingKey(key);
   }
 
-  function commitEdit(slot: Slot, idx: number) {
-    const trimmed = editValue.trim();
+  function commitEdit(slot: Slot, idx: number, overrideValue?: string, overrideUser?: User | null) {
+    const trimmed = (overrideValue ?? editValue).trim();
     const isWl = idx >= slot.players.length;
     const p = isWl ? slot.waitList[idx - slot.players.length] : slot.players[idx];
     const original = isBlank(p) ? '' : p.name;
@@ -240,8 +240,9 @@ export default function IndexPage() {
 
     const isDelete = !trimmed;
     const isMainPlayer = idx < slot.players.length;
+    const userForAssignment = overrideUser !== undefined ? overrideUser : selectedUser;
     const assignedUserId =
-      selectedUser && trimmed === selectedUser.name ? selectedUser._id : undefined;
+      userForAssignment && trimmed === userForAssignment.name ? userForAssignment._id : undefined;
 
     const suffix =
       isDelete && isMainPlayer
@@ -328,7 +329,10 @@ export default function IndexPage() {
                   }
                 }}
                 onBlur={() => {
-                  setTimeout(() => commitEdit(slot, globalIdx), 120);
+                  setTimeout(() => {
+                    setEditingKey(null);
+                    setSelectedUser(null);
+                  }, 120);
                 }}
               />
               {isAdmin &&
@@ -346,10 +350,11 @@ export default function IndexPage() {
                           key={u._id}
                           className="ip-user-dropdown-item"
                           onMouseDown={(e) => {
-                            // prevent the input's blur from firing before the click registers
+                            // stop the input from blurring before this click registers
                             e.preventDefault();
-                            setEditValue(u.name);
-                            setSelectedUser(u);
+                          }}
+                          onClick={() => {
+                            commitEdit(slot, globalIdx, u.name, u);
                           }}
                         >
                           {u.name}
