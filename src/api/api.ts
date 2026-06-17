@@ -49,7 +49,7 @@ export const resizeSlot = (
 
 export const updatePlayer = (
   id: string,
-  data: { playerIndex: number; name: string; lastUpdatedAt: string },
+  data: { playerIndex: number; name: string; lastUpdatedAt: string; assignedUserId?: string },
 ) => axios.patch(`${BASE}/slots/${id}/player`, data, { headers: getHeaders() });
 
 export const updateAmount = (id: string, data: UpdateAmountPayload) =>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
-import { getSlots, updatePlayer, updatePayment, getSelf } from '../api/api';
+import { getSlots, updatePlayer, updatePayment, getSelf, getUsers } from '../api/api';
 import type { Slot, Player, GroupedSlots, User } from '../types';
 import type { AxiosError } from 'axios';
 
@@ -85,6 +85,8 @@ export default function IndexPage() {
   const [editingKey, setEditingKey] = useState<string | null>(null); // "slotId_playerIndex"
   const [editValue, setEditValue] = useState('');
   const [selfUser, setSelfUser] = useState<User | null>(null);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
 
   // ── fetch ─────────────────────────────────────────────────────────────────
   const fetchSelf = useCallback(async () => {
@@ -113,6 +115,15 @@ export default function IndexPage() {
   }, []);
 
   const didInit = useRef(false);
+
+  useEffect(() => {
+    if (selfUser?.role !== 'admin' || allUsers.length > 0) return;
+    getUsers()
+      .then((res) => setAllUsers(res.data.users))
+      .catch(() => {
+        // silently fail — dropdown just won't show suggestions
+      });
+  }, [selfUser, allUsers.length]);
 
   useEffect(() => {
     if (didInit.current) return;
@@ -162,13 +173,19 @@ export default function IndexPage() {
   }
 
   // ── update player ─────────────────────────────────────────────────────────
-  async function doUpdatePlayer(slotId: string, idx: number, name: string, lastUpdatedAt: string) {
+  async function doUpdatePlayer(
+    slotId: string,
+    idx: number,
+    name: string,
+    lastUpdatedAt: string,
+    assignedUserId?: string,
+  ) {
     setLoaderMsg('Updating booking...');
     setLoading(true);
     setEditingKey(null);
 
     try {
-      await updatePlayer(slotId, { playerIndex: idx, name, lastUpdatedAt });
+      await updatePlayer(slotId, { playerIndex: idx, name, lastUpdatedAt, assignedUserId });
       await fetchSlots(true);
     } catch (err) {
       const msg =
@@ -205,6 +222,7 @@ export default function IndexPage() {
     const isWl = idx >= slot.players.length;
     const p = isWl ? slot.waitList[idx - slot.players.length] : slot.players[idx];
     setEditValue(isBlank(p) ? '' : p.name);
+    setSelectedUser(null);
     setEditingKey(key);
   }
 
@@ -216,11 +234,14 @@ export default function IndexPage() {
 
     if (trimmed === original) {
       setEditingKey(null);
+      setSelectedUser(null);
       return;
     }
 
     const isDelete = !trimmed;
     const isMainPlayer = idx < slot.players.length;
+    const assignedUserId =
+      selectedUser && trimmed === selectedUser.name ? selectedUser._id : undefined;
 
     const suffix =
       isDelete && isMainPlayer
@@ -231,7 +252,7 @@ export default function IndexPage() {
       `${
         isDelete ? 'Remove player from' : `Confirm slot for <b>${trimmed}</b> —`
       } ${isDelete ? `slot?${suffix}` : 'confirm?'}`,
-      () => doUpdatePlayer(slot._id, idx, trimmed, slot.updatedAt),
+      () => doUpdatePlayer(slot._id, idx, trimmed, slot.updatedAt, assignedUserId),
       undefined,
       false,
       isDelete ? 'Remove' : 'Confirm',
@@ -239,6 +260,7 @@ export default function IndexPage() {
     );
 
     setEditingKey(null);
+    setSelectedUser(null);
   }
 
   // ── render player row ─────────────────────────────────────────────────────
@@ -285,25 +307,58 @@ export default function IndexPage() {
         {/* name / input */}
         <div className="ip-col-name">
           {isEditingThis && !rowFrozen ? (
-            <input
-              className="ip-inline-input"
-              autoFocus
-              value={editValue}
-              onChange={(e) => setEditValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  commitEdit(slot, globalIdx);
-                }
-                if (e.key === 'Escape') {
-                  e.preventDefault();
-                  setEditingKey(null);
-                }
-              }}
-              onBlur={() => {
-                setTimeout(() => commitEdit(slot, globalIdx), 120);
-              }}
-            />
+            <div className="ip-name-edit-wrap">
+              <input
+                className="ip-inline-input"
+                autoFocus
+                value={editValue}
+                onChange={(e) => {
+                  setEditValue(e.target.value);
+                  if (selectedUser && e.target.value !== selectedUser.name) setSelectedUser(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitEdit(slot, globalIdx);
+                  }
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setEditingKey(null);
+                    setSelectedUser(null);
+                  }
+                }}
+                onBlur={() => {
+                  setTimeout(() => commitEdit(slot, globalIdx), 120);
+                }}
+              />
+              {isAdmin &&
+                editValue.trim().length > 0 &&
+                (() => {
+                  const q = editValue.trim().toLowerCase();
+                  const matches = allUsers
+                    .filter((u) => u.name.toLowerCase().includes(q))
+                    .slice(0, 6);
+                  if (matches.length === 0) return null;
+                  return (
+                    <div className="ip-user-dropdown">
+                      {matches.map((u) => (
+                        <div
+                          key={u._id}
+                          className="ip-user-dropdown-item"
+                          onMouseDown={(e) => {
+                            // prevent the input's blur from firing before the click registers
+                            e.preventDefault();
+                            setEditValue(u.name);
+                            setSelectedUser(u);
+                          }}
+                        >
+                          {u.name}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+            </div>
           ) : (
             <div
               className={nameClass}
@@ -704,6 +759,34 @@ export default function IndexPage() {
           background: #111;
           color: #f0f0f0;
         }
+
+        .ip-name-edit-wrap { position: relative; width: 100%; }
+
+        .ip-user-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          margin-top: 4px;
+          background: #1a1a1a;
+          border: 1px solid #333;
+          border-radius: 8px;
+          max-height: 160px;
+          overflow-y: auto;
+          z-index: 60;
+          box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+        }
+
+        .ip-user-dropdown-item {
+          padding: 7px 12px;
+          font-size: 13px;
+          color: #e0e0e0;
+          cursor: pointer;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .ip-user-dropdown-item:hover { background: #22c55e; color: #000; }
 
         .ip-remove-btn {
           background: transparent;
