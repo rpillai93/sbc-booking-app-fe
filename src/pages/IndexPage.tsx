@@ -342,7 +342,17 @@ export default function IndexPage() {
                 }}
                 onBlur={() => {
                   setTimeout(() => {
-                    setEditingKey(null);
+                    if (isAdmin) {
+                      // Admins: blur cancels. This protects the dropdown-driven flow —
+                      // a dropdown item's onMouseDown keeps focus on the input until its
+                      // onClick fires, so a real selection never reaches this branch.
+                      // Any other blur (tapping elsewhere, no selection made) reverts.
+                      setEditingKey(null);
+                    } else {
+                      // Non-admins: no dropdown exists, so blur should commit as before —
+                      // this is the only way to save on mobile, where there's no Enter key.
+                      commitEdit(slot, globalIdx);
+                    }
                   }, 120);
                 }}
               />
