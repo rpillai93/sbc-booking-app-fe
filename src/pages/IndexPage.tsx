@@ -25,6 +25,21 @@ const CLOSED_MODAL: ModalState = {
   confirmColor: '#dc2626',
 };
 
+interface NameEntryState {
+  open: boolean;
+  slot: Slot | null;
+  idx: number;
+  user: User | null;
+  value: string;
+}
+const CLOSED_NAME_ENTRY: NameEntryState = {
+  open: false,
+  slot: null,
+  idx: -1,
+  user: null,
+  value: '',
+};
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 function emptyPlayer(): Player {
   return {
@@ -86,7 +101,7 @@ export default function IndexPage() {
   const [editValue, setEditValue] = useState('');
   const [selfUser, setSelfUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [selectedUser, setSelectedUser] = useState<User | null>(null);
+  const [nameEntry, setNameEntry] = useState<NameEntryState>(CLOSED_NAME_ENTRY);
 
   // ── fetch ─────────────────────────────────────────────────────────────────
   const fetchSelf = useCallback(async () => {
@@ -183,7 +198,6 @@ export default function IndexPage() {
     setLoaderMsg('Updating booking...');
     setLoading(true);
     setEditingKey(null);
-
     try {
       await updatePlayer(slotId, { playerIndex: idx, name, lastUpdatedAt, assignedUserId });
       await fetchSlots(true);
@@ -222,27 +236,23 @@ export default function IndexPage() {
     const isWl = idx >= slot.players.length;
     const p = isWl ? slot.waitList[idx - slot.players.length] : slot.players[idx];
     setEditValue(isBlank(p) ? '' : p.name);
-    setSelectedUser(null);
     setEditingKey(key);
   }
 
-  function commitEdit(slot: Slot, idx: number, overrideValue?: string, overrideUser?: User | null) {
+  function commitEdit(slot: Slot, idx: number, overrideValue?: string, assignedUser?: User) {
     const trimmed = (overrideValue ?? editValue).trim();
     const isWl = idx >= slot.players.length;
     const p = isWl ? slot.waitList[idx - slot.players.length] : slot.players[idx];
     const original = isBlank(p) ? '' : p.name;
 
-    if (trimmed === original) {
+    if (trimmed === original && !assignedUser) {
       setEditingKey(null);
-      setSelectedUser(null);
       return;
     }
 
     const isDelete = !trimmed;
     const isMainPlayer = idx < slot.players.length;
-    const userForAssignment = overrideUser !== undefined ? overrideUser : selectedUser;
-    const assignedUserId =
-      userForAssignment && trimmed === userForAssignment.name ? userForAssignment._id : undefined;
+    const assignedUserId = assignedUser?._id;
 
     const suffix =
       isDelete && isMainPlayer
@@ -261,7 +271,13 @@ export default function IndexPage() {
     );
 
     setEditingKey(null);
-    setSelectedUser(null);
+  }
+
+  function confirmNameEntry() {
+    const { slot, idx, user, value } = nameEntry;
+    if (!slot || !user || !value.trim()) return;
+    setNameEntry(CLOSED_NAME_ENTRY);
+    commitEdit(slot, idx, value, user);
   }
 
   // ── render player row ─────────────────────────────────────────────────────
@@ -313,10 +329,7 @@ export default function IndexPage() {
                 className="ip-inline-input"
                 autoFocus
                 value={editValue}
-                onChange={(e) => {
-                  setEditValue(e.target.value);
-                  if (selectedUser && e.target.value !== selectedUser.name) setSelectedUser(null);
-                }}
+                onChange={(e) => setEditValue(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
@@ -325,13 +338,11 @@ export default function IndexPage() {
                   if (e.key === 'Escape') {
                     e.preventDefault();
                     setEditingKey(null);
-                    setSelectedUser(null);
                   }
                 }}
                 onBlur={() => {
                   setTimeout(() => {
                     setEditingKey(null);
-                    setSelectedUser(null);
                   }, 120);
                 }}
               />
@@ -350,11 +361,11 @@ export default function IndexPage() {
                           key={u._id}
                           className="ip-user-dropdown-item"
                           onMouseDown={(e) => {
-                            // stop the input from blurring before this click registers
                             e.preventDefault();
                           }}
                           onClick={() => {
-                            commitEdit(slot, globalIdx, u.name, u);
+                            setEditingKey(null);
+                            setNameEntry({ open: true, slot, idx: globalIdx, user: u, value: '' });
                           }}
                         >
                           {u.name}
@@ -871,6 +882,25 @@ export default function IndexPage() {
         .ip-modal-btn:hover { opacity: 0.85; }
         .ip-modal-cancel { background: #2a2a2a; color: #aaa; }
 
+        .ip-modal-input {
+          width: 100%;
+          padding: 8px 12px;
+          border: 1px solid #333;
+          border-radius: 8px;
+          font-size: 14px;
+          font-family: 'DM Sans', sans-serif;
+          background: #111;
+          color: #f0f0f0;
+          margin-bottom: 16px;
+          outline: none;
+        }
+        .ip-modal-input:focus { border-color: #22c55e; }
+
+        .ip-modal-btn:disabled {
+          opacity: 0.35;
+          cursor: not-allowed;
+        }
+
         @media (max-width: 600px) {
             .ip-grid-header, .ip-player-row {
                 grid-template-columns: 32px 1fr 72px 44px 32px;
@@ -927,6 +957,41 @@ export default function IndexPage() {
         </div>
       )}
 
+      {nameEntry.open && (
+        <div className="ip-modal-backdrop">
+          <div className="ip-modal">
+            <div className="ip-modal-msg">Enter name of player</div>
+            <input
+              className="ip-modal-input"
+              autoFocus
+              value={nameEntry.value}
+              onChange={(e) => setNameEntry((prev) => ({ ...prev, value: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && nameEntry.value.trim()) {
+                  e.preventDefault();
+                  confirmNameEntry();
+                }
+              }}
+            />
+            <div className="ip-modal-btns">
+              <button
+                className="ip-modal-btn"
+                style={{ background: '#16a34a', color: '#fff' }}
+                disabled={!nameEntry.value.trim()}
+                onClick={confirmNameEntry}
+              >
+                Confirm
+              </button>
+              <button
+                className="ip-modal-btn ip-modal-cancel"
+                onClick={() => setNameEntry(CLOSED_NAME_ENTRY)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="ip-root">
         {/* Top bar */}
         <div className="ip-topbar">
