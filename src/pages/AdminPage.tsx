@@ -794,6 +794,9 @@ export default function AdminPage() {
 
   const settleAmt = parseFloat(settleModal.value);
   const settleInvalid = isNaN(settleAmt) || settleAmt <= 0 || settleAmt > settleModal.balance;
+  const safeBalancePayment = Object.is(selfUser?.balancePayments, -0)
+    ? 0
+    : selfUser?.balancePayments;
   // ── render ────────────────────────────────────────────────────────────────
   return (
     <>
@@ -1840,13 +1843,13 @@ export default function AdminPage() {
               style={{
                 fontSize: '14px',
                 fontWeight: 600,
-                color: selfUser && selfUser.balancePayments > 0 ? '#f59e0b' : '#22c55e',
+                color: safeBalancePayment && safeBalancePayment > 0 ? '#f59e0b' : '#22c55e',
               }}
             >
-              {selfUser && selfUser.balancePayments
-                ? selfUser.balancePayments > 0
-                  ? `$${Math.round(selfUser.balancePayments * 100) / 100}`
-                  : `-$${Math.round(Math.abs(selfUser.balancePayments) * 100) / 100}`
+              {safeBalancePayment
+                ? safeBalancePayment > 0
+                  ? `$${Math.round(safeBalancePayment * 100) / 100}`
+                  : `-$${Math.round(Math.abs(safeBalancePayment) * 100) / 100}`
                 : `$0`}
             </span>
             <span className="ap-email-label">Logged in as:</span>
