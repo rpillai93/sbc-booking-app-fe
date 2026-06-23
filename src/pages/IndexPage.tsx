@@ -59,6 +59,20 @@ function isBlank(p: Player) {
   return !p.name || p.name === '' || p.name === 'Available' || p.name === 'Waitlist';
 }
 
+// Filled / max player counts for a court (waitlist doesn't count toward max).
+function getCourtFillInfo(slot: Slot) {
+  const max = slot.players.length;
+  const filled = slot.players.filter((p) => !isBlank(p)).length;
+  return { filled, max };
+}
+
+// Color for the minimized summary line: grey if locked, orange if full, else green.
+function getCourtSummaryColor(slot: Slot, filled: number, max: number): string {
+  if (slot.slotLocked) return '#888'; // grey — matches ip-group-label-disabled
+  if (filled >= max) return '#f59e0b'; // orange — full but still open
+  return '#22c55e'; // green — open with availability
+}
+
 // Converts stored timestamp to short format: "2:21pm · May 10"
 function formatTimestamp(ts: string): string {
   if (!ts) return '';
@@ -665,6 +679,39 @@ export default function IndexPage() {
         }
         .ip-court:hover { border-color: #333; }
 
+        /* ── court expandable summary ── */
+        .ip-court-summary {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          cursor: pointer;
+          list-style: none;
+          user-select: none;
+          gap: 10px;
+        }
+        .ip-court-summary::-webkit-details-marker { display: none; }
+
+        .ip-court-summary-text {
+          font-family: 'Syne', sans-serif;
+          font-weight: 700;
+          font-size: 13px;
+          line-height: 1.6;
+        }
+
+        .ip-court-summary-count {
+          font-weight: 800;
+        }
+
+        .ip-court-arrow {
+          transition: transform 0.25s;
+          color: #666;
+          font-size: 12px;
+          flex-shrink: 0;
+        }
+        details[open] .ip-court-arrow { transform: rotate(180deg); }
+
+        .ip-court-body { margin-top: 12px; }
+
         .ip-court-title {
           font-family: 'Syne', sans-serif;
           font-weight: 700;
@@ -1123,60 +1170,77 @@ export default function IndexPage() {
                   const visibleSlots = slots.filter((s) => !s.slotHidden);
                   if (visibleSlots.length === 0) return null;
 
-                  const isAllSlotsLocked = slots.every((s) => s.slotLocked);
-                  const first = slots[0];
                   return (
                     <div key={key} className="ip-group">
-                      {isAllSlotsLocked ? (
-                        <div className="ip-group-label ip-group-label-disabled">
-                          {first.date} <br /> {first.time} <br />
-                        </div>
-                      ) : (
-                        <div className="ip-group-label">
-                          {first.date} <br /> {first.time} <br />
-                        </div>
-                      )}
-                      {visibleSlots.map((slot) => (
-                        <div key={slot._id} className="ip-court">
-                          <div className="ip-court-title">
-                            {slot.numberOfCourts} Court(s) : Max. {slot.players.length} Players
-                          </div>
+                      {visibleSlots.map((slot) => {
+                        const { filled, max } = getCourtFillInfo(slot);
+                        const summaryColor = getCourtSummaryColor(slot, filled, max);
 
-                          {slot.slotLocked && slot.slotAmountPublished && (
-                            <>
-                              <div className="ip-locked-msg">
-                                ⚠ Bookings are locked. Speak to an admin to make changes.
-                              </div>
-                              <div className="ip-payment-info">
-                                {
+                        return (
+                          <div key={slot._id} className="ip-court">
+                            <details>
+                              <summary className="ip-court-summary">
+                                <span
+                                  className="ip-court-summary-text"
+                                  style={{ color: summaryColor }}
+                                >
+                                  {slot.date.toUpperCase()}
+                                  <br />
+                                  {slot.time}
+                                  <br />
+                                  {slot.numberOfCourts} Court(s): Max. {max} players
+                                  <br />
+                                  <span className="ip-court-summary-count">
+                                    ({filled}/{max})
+                                  </span>
+                                </span>
+                                <span className="ip-court-arrow">▼</span>
+                              </summary>
+
+                              <div className="ip-court-body">
+                                <div className="ip-court-title">
+                                  {slot.numberOfCourts} Court(s) : Max. {slot.players.length}{' '}
+                                  Players
+                                </div>
+
+                                {slot.slotLocked && slot.slotAmountPublished && (
                                   <>
-                                    Please send the payment via Interac to{' '}
-                                    <strong>
-                                      <u>grow@raghavv.ca</u>
-                                    </strong>
-                                    . Tick ✅ the PAYMENT box after.
+                                    <div className="ip-locked-msg">
+                                      ⚠ Bookings are locked. Speak to an admin to make changes.
+                                    </div>
+                                    <div className="ip-payment-info">
+                                      {
+                                        <>
+                                          Please send the payment via Interac to{' '}
+                                          <strong>
+                                            <u>grow@raghavv.ca</u>
+                                          </strong>
+                                          . Tick ✅ the PAYMENT box after.
+                                        </>
+                                      }
+                                    </div>
                                   </>
-                                }
+                                )}
+
+                                {/* Grid header */}
+                                <div className="ip-grid-header">
+                                  <div>PLAYER</div>
+                                  <div>NAME</div>
+                                  <div>OWNER / LAST UPDATE</div>
+                                  <div>PAYMENT</div>
+                                  <div>REMOVE</div>
+                                </div>
+
+                                {/* Player rows */}
+                                {Array.from(
+                                  { length: slot.players.length + slot.waitList.length },
+                                  (_, i) => renderPlayer(slot, i),
+                                )}
                               </div>
-                            </>
-                          )}
-
-                          {/* Grid header */}
-                          <div className="ip-grid-header">
-                            <div>PLAYER</div>
-                            <div>NAME</div>
-                            <div>OWNER / LAST UPDATE</div>
-                            <div>PAYMENT</div>
-                            <div>REMOVE</div>
+                            </details>
                           </div>
-
-                          {/* Player rows */}
-                          {Array.from(
-                            { length: slot.players.length + slot.waitList.length },
-                            (_, i) => renderPlayer(slot, i),
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   );
                 })
