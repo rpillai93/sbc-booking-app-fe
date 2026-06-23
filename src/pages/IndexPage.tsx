@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 import { getSlots, updatePlayer, updatePayment, getSelf, getUsers } from '../api/api';
 import type { Slot, Player, GroupedSlots, User } from '../types';
@@ -68,9 +68,9 @@ function getCourtFillInfo(slot: Slot) {
 
 // Color for the minimized summary line: grey if locked, orange if full, else green.
 function getCourtSummaryColor(slot: Slot, filled: number, max: number): string {
-  if (slot.slotLocked) return '#888'; // grey — matches ip-group-label-disabled
-  if (filled >= max) return '#f59e0b'; // orange — full but still open
-  return '#22c55e'; // green — open with availability
+  if (slot.slotLocked) return '#888';
+  if (filled >= max) return '#f59e0b';
+  return '#22c55e';
 }
 
 // Converts stored timestamp to short format: "2:21pm · May 10"
@@ -106,6 +106,7 @@ function formatTimestamp(ts: string): string {
 export default function IndexPage() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const { slotId: linkedSlotId } = useParams<{ slotId?: string }>();
 
   const [groupedSlots, setGroupedSlots] = useState<GroupedSlots>({});
   const [loading, setLoading] = useState(true);
@@ -117,6 +118,14 @@ export default function IndexPage() {
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [nameEntry, setNameEntry] = useState<NameEntryState>(CLOSED_NAME_ENTRY);
 
+  // ── expanded-court tracking (controlled <details>) ──────────────────────────
+  // Which court ids are currently open. Manual clicks toggle freely; a linked
+  // slot (via /booking/:slotId) is force-opened once the data arrives.
+  const [openCourts, setOpenCourts] = useState<Set<string>>(new Set());
+  const [copiedSlotId, setCopiedSlotId] = useState<string | null>(null);
+  const didAutoExpand = useRef(false);
+  const courtRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
   // ── fetch ─────────────────────────────────────────────────────────────────
   const fetchSelf = useCallback(async () => {
     try {
@@ -127,21 +136,45 @@ export default function IndexPage() {
     }
   }, []);
 
-  const fetchSlots = useCallback(async (quiet = false) => {
-    if (!quiet) {
-      setLoaderMsg('Loading bookings...');
-      setLoading(true);
-    }
+  const fetchSlots = useCallback(
+    async (quiet = false) => {
+      if (!quiet) {
+        setLoaderMsg('Loading bookings...');
+        setLoading(true);
+      }
 
-    try {
-      const res = await getSlots();
-      setGroupedSlots(res.data.groupedSlots);
-    } catch {
-      showOkayMsg('Failed to load bookings. Please refresh.');
-    } finally {
-      if (!quiet) setLoading(false);
-    }
-  }, []);
+      try {
+        const res = await getSlots();
+        setGroupedSlots(res.data.groupedSlots);
+
+        // Auto-expand the linked court (from /booking/:slotId) the first time
+        // data loads and contains a matching slot. Doing this here — right after
+        // the fetch resolves — instead of in a useEffect keyed on groupedSlots
+        // avoids a setState-in-effect cascade; this is a plain async callback.
+        if (linkedSlotId && !didAutoExpand.current) {
+          const allSlots = Object.values(res.data.groupedSlots).flat() as Slot[];
+          const match = allSlots.some((s) => s._id === linkedSlotId);
+          if (match) {
+            didAutoExpand.current = true;
+            setOpenCourts((prev) => new Set(prev).add(linkedSlotId));
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                courtRefs.current[linkedSlotId]?.scrollIntoView({
+                  behavior: 'smooth',
+                  block: 'start',
+                });
+              });
+            });
+          }
+        }
+      } catch {
+        showOkayMsg('Failed to load bookings. Please refresh.');
+      } finally {
+        if (!quiet) setLoading(false);
+      }
+    },
+    [linkedSlotId],
+  );
 
   const didInit = useRef(false);
 
@@ -160,6 +193,29 @@ export default function IndexPage() {
     fetchSlots();
     fetchSelf();
   }, [fetchSlots, fetchSelf]);
+
+  function toggleCourt(slotId: string, nextOpen: boolean) {
+    setOpenCourts((prev) => {
+      const next = new Set(prev);
+      if (nextOpen) next.add(slotId);
+      else next.delete(slotId);
+      return next;
+    });
+  }
+
+  async function copyBookingLink(slotId: string) {
+    const url = `${window.location.origin}/booking/${slotId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      // Clipboard API unavailable (e.g. insecure context) — fall back silently.
+      // The button still flashes "Copied" optimistically would be misleading,
+      // so just skip the confirmation in this rare case.
+      return;
+    }
+    setCopiedSlotId(slotId);
+    setTimeout(() => setCopiedSlotId((cur) => (cur === slotId ? null : cur)), 1500);
+  }
 
   // ── okay helper (wrapped by confirm helper)──────────────────────────────
   function showOkayMsg(
@@ -652,22 +708,6 @@ export default function IndexPage() {
         /* ── booking group ── */
         .ip-group { margin-bottom: 22px; }
 
-        .ip-group-label {
-          font-family: 'Syne', sans-serif;
-          font-size: 13px;
-          font-weight: 700;
-          color: #22c55e;
-          padding: 8px 0;
-          border-bottom: 1px solid #1e1e1e;
-          margin-bottom: 10px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .ip-group-label-disabled {
-        color: #888;
-        }
-
         /* ── court ── */
         .ip-court {
           background: #161616;
@@ -709,6 +749,27 @@ export default function IndexPage() {
           flex-shrink: 0;
         }
         details[open] .ip-court-arrow { transform: rotate(180deg); }
+
+        .ip-court-summary-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          flex-shrink: 0;
+        }
+
+        .ip-court-link-btn {
+          background: transparent;
+          border: 1px solid #333;
+          border-radius: 7px;
+          padding: 5px 8px;
+          font-size: 13px;
+          line-height: 1;
+          cursor: pointer;
+          width: auto;
+          margin: 0;
+          transition: border-color 0.15s, opacity 0.15s;
+        }
+        .ip-court-link-btn:hover { border-color: #666; opacity: 0.85; }
 
         .ip-court-body { margin-top: 12px; }
 
@@ -1175,10 +1236,23 @@ export default function IndexPage() {
                       {visibleSlots.map((slot) => {
                         const { filled, max } = getCourtFillInfo(slot);
                         const summaryColor = getCourtSummaryColor(slot, filled, max);
+                        const isOpen = openCourts.has(slot._id);
+                        const justCopied = copiedSlotId === slot._id;
 
                         return (
-                          <div key={slot._id} className="ip-court">
-                            <details>
+                          <div
+                            key={slot._id}
+                            className="ip-court"
+                            ref={(el) => {
+                              courtRefs.current[slot._id] = el;
+                            }}
+                          >
+                            <details
+                              open={isOpen}
+                              onToggle={(e) =>
+                                toggleCourt(slot._id, (e.target as HTMLDetailsElement).open)
+                              }
+                            >
                               <summary className="ip-court-summary">
                                 <span
                                   className="ip-court-summary-text"
@@ -1194,7 +1268,21 @@ export default function IndexPage() {
                                     ({filled}/{max})
                                   </span>
                                 </span>
-                                <span className="ip-court-arrow">▼</span>
+                                <span className="ip-court-summary-actions">
+                                  <button
+                                    type="button"
+                                    className="ip-court-link-btn"
+                                    title="Copy link to this booking"
+                                    onClick={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      copyBookingLink(slot._id);
+                                    }}
+                                  >
+                                    {justCopied ? '✅' : '🔗'}
+                                  </button>
+                                  <span className="ip-court-arrow">▼</span>
+                                </span>
                               </summary>
 
                               <div className="ip-court-body">

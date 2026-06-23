@@ -20,6 +20,14 @@ export default function App() {
             }
           />
           <Route
+            path="/booking/:slotId"
+            element={
+              <ProtectedRoute>
+                <IndexPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
             path="/admin"
             element={
               <ProtectedRoute adminOnly>
